@@ -1,4 +1,25 @@
+# Python virtualenv and caches
 .venv/
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor / OS artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Project outputs
 output/
-*.pyc
+
+# Windows metadata artifacts
+*:Zone.Identifier
+*.Zone.Identifier

@@ -894,6 +894,20 @@ def zone_label(zones, zone_num):
     count = sum(1 for z in zones if z["type"] == ztype and z["num"] <= zone_num)
     return f"{ztype} {count}"
 
+
+def _zone_type_to_english(ztype: str) -> str:
+    """Translate program zone type names to English for plot titles."""
+    z = (ztype or "").strip().lower()
+    mapping = {
+        "isoterma": "Isotherm",
+        "isothermal": "Isotherm",
+        "heating": "Heating",
+        "cooling": "Cooling",
+        "return": "Return",
+    }
+    return mapping.get(z, ztype)
+
+
 def isotherm_spans_from_program(pdf_path: Path, t_h=None):
     zones = load_program_zones(pdf_path)
     if not zones:
@@ -1040,11 +1054,11 @@ def plot_panel_6(
 
     fig, axes = plt.subplots(3, 2, figsize=(10, 7), constrained_layout=True)
     if zone_info is not None:
-        fig.suptitle(f"Zona {zone_info['num']} - {zone_info['type']}")
+        fig.suptitle(f"Zone {zone_info['num']} - {_zone_type_to_english(zone_info['type'])}")
 
     # 1) P vs t
     ax = axes[0, 0]
-    ax.plot(t_h, clean["P_muestra"], color="black", label="P muestra")
+    ax.plot(t_h, clean["P_muestra"], color="black", label="Sample P")
     if "P_referencia" in clean.columns:
         ax.plot(
             t_h,
@@ -1052,7 +1066,7 @@ def plot_panel_6(
             color="dimgray",
             linestyle="--",
             linewidth=1.2,
-            label="P referencia",
+            label="Reference P",
         )
     if zone_spans:
         for z in zone_spans:
@@ -1063,13 +1077,13 @@ def plot_panel_6(
         for t0, t1 in iso_spans:
             ax.axvspan(t0, t1, color="gray", alpha=0.15, linewidth=0)
     ax.set_xlabel("t (h)")
-    ax.set_ylabel("Presión (Bar)")
+    ax.set_ylabel("Pressure (bar)")
     if "P_referencia" in clean.columns:
         ax.legend(loc="best", fontsize=8)
 
     # 2) P vs T
     ax = axes[0, 1]
-    ax.plot(clean["T_muestra"], clean["P_muestra"], color="black", label="P muestra")
+    ax.plot(clean["T_muestra"], clean["P_muestra"], color="black", label="Sample P")
     if "P_referencia" in clean.columns:
         ax.plot(
             clean["T_muestra"],
@@ -1077,17 +1091,17 @@ def plot_panel_6(
             color="dimgray",
             linestyle="--",
             linewidth=1.2,
-            label="P referencia",
+            label="Reference P",
         )
     ax.set_xlabel("T (°C)")
-    ax.set_ylabel("Presión (Bar)")
+    ax.set_ylabel("Pressure (bar)")
     if "P_referencia" in clean.columns:
         ax.legend(loc="best", fontsize=8)
 
-    # 3) T vs t (T horno en naranja) + líneas verticales naranjas
+    # 3) T vs t
     ax = axes[1, 0]
-    ax.plot(t_h, clean["T_muestra"], color="black", label="T muestra")
-    ax.plot(t_h, clean["T_horno"], color="orange", label="T horno")
+    ax.plot(t_h, clean["T_muestra"], color="black", label="Sample T")
+    ax.plot(t_h, clean["T_horno"], color="orange", label="Furnace T")
     if zone_spans:
         for z in zone_spans:
             key = z["type"].lower().split()[0]
@@ -1098,7 +1112,7 @@ def plot_panel_6(
         for t0, t1 in iso_spans:
             ax.axvspan(t0, t1, color="gray", alpha=0.15, linewidth=0)
     ax.set_xlabel("t (h)")
-    ax.set_ylabel("Temperatura (°C)")
+    ax.set_ylabel("Temperature (°C)")
     ax.legend(loc="best", fontsize=8)
 
     # 4) HF vs T
@@ -1188,7 +1202,7 @@ def plot_panel_6(
                 color="blue",
                 linewidth=1.0,
                 alpha=0.8,
-                label="Línea base (onset2)",
+                label="Baseline (onset2)",
             )
             ax.plot(
                 x_fit,
@@ -1197,7 +1211,7 @@ def plot_panel_6(
                 color="magenta",
                 linewidth=1.0,
                 alpha=0.8,
-                label="Ajuste flanco (onset2)",
+                label="Flank fit (onset2)",
             )
             show_onset2_fit = True
         xb0 = peak_info.get("baseline_w0_h", np.nan)
@@ -1217,7 +1231,7 @@ def plot_panel_6(
                 color="navy",
                 linewidth=1.4,
                 alpha=0.95,
-                label="Línea base (ventana ajuste)",
+                label="Baseline (fit window)",
             )
             show_baseline_window = True
     if peak_info is not None:
@@ -1298,12 +1312,76 @@ def plot_panel_6(
             color="magenta",
             bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
         )
-    ax.set_xlabel("P (Bar)")
+    ax.set_xlabel("P (bar)")
     ax.set_ylabel("HF (mW)")
 
     fig.savefig(outdir / outname, dpi=200)
     plt.close(fig)
     return peak_info
+
+
+def _nearest_tp_at_time(clean: pd.DataFrame, t_on_h: float) -> tuple[float, float]:
+    """Return (T, P) from the sample closest to the given time in hours."""
+    idx = int(np.abs(clean["t_h"].to_numpy() - t_on_h).argmin())
+    t_on = float(clean["T_muestra"].iloc[idx])
+    p_on = float(clean["P_muestra"].iloc[idx])
+    return t_on, p_on
+
+
+def _print_onset_windows(kind: str, bw, fw, zone_name: str | None = None) -> None:
+    """Print baseline/flank windows with the same format used in CLI output."""
+    if not (
+        np.all(np.isfinite(np.asarray(bw, dtype=float)))
+        and np.all(np.isfinite(np.asarray(fw, dtype=float)))
+    ):
+        return
+
+    zone_suffix = f" ({zone_name})" if zone_name else ""
+    pair_sep = " " if zone_name else ", "
+    print(
+        f"Ventanas {kind}{zone_suffix}: "
+        f"base=[{bw[0]:.4f},{bw[1]:.4f}] h{pair_sep}"
+        f"pico=[{fw[0]:.4f},{fw[1]:.4f}] h"
+    )
+
+
+def print_peak_summary(clean: pd.DataFrame, peak_info: dict, zone_name: str | None = None) -> None:
+    """Print onset/onset2 and window summary from `peak_info`."""
+    zone_suffix = f" ({zone_name})" if zone_name else ""
+
+    t_on, p_on = _nearest_tp_at_time(clean, peak_info["t_start_h"])
+    print(
+        f"HF onset{zone_suffix}: "
+        f"t={peak_info['t_start_h']:.4f} h, "
+        f"HF={peak_info['hf_start']:.6g} mW, "
+        f"T={t_on:.3f} °C, P={p_on:.3f} bar"
+    )
+    _print_onset_windows(
+        "onset",
+        peak_info.get("baseline_window_onset_h", (np.nan, np.nan)),
+        peak_info.get("flank_window_onset_h", (np.nan, np.nan)),
+        zone_name=zone_name,
+    )
+
+    if peak_info.get("onset2_ok") and np.isfinite(peak_info.get("t_start2_h", np.nan)):
+        t_on2, p_on2 = _nearest_tp_at_time(clean, peak_info["t_start2_h"])
+        print(
+            f"HF onset2{zone_suffix}: "
+            f"t={peak_info['t_start2_h']:.4f} h, "
+            f"HF={peak_info['hf_start2']:.6g} mW, "
+            f"T={t_on2:.3f} °C, P={p_on2:.3f} bar"
+        )
+        _print_onset_windows(
+            "onset2",
+            peak_info.get("baseline_window_onset2_h", (np.nan, np.nan)),
+            peak_info.get("flank_window_onset2_h", (np.nan, np.nan)),
+            zone_name=zone_name,
+        )
+
+    t_char_50 = peak_info.get("t_char_50", np.nan)
+    if np.isfinite(t_char_50):
+        print(f"T_char_50{zone_suffix}: t={t_char_50:.4f} h")
+
 
 if __name__ == "__main__":
     import argparse
@@ -1442,51 +1520,7 @@ if __name__ == "__main__":
             show_onset=True,
         )
         if peak_info is not None:
-            idx_on = int(np.abs(clean["t_h"].to_numpy() - peak_info["t_start_h"]).argmin())
-            t_on = clean["T_muestra"].iloc[idx_on]
-            p_on = clean["P_muestra"].iloc[idx_on]
-            print(
-                f"HF onset ({zone_name}): "
-                f"t={peak_info['t_start_h']:.4f} h, "
-                f"HF={peak_info['hf_start']:.6g} mW, "
-                f"T={t_on:.3f} °C, P={p_on:.3f} bar"
-            )
-            bw1 = peak_info.get("baseline_window_onset_h", (np.nan, np.nan))
-            fw1 = peak_info.get("flank_window_onset_h", (np.nan, np.nan))
-            if np.all(np.isfinite(np.asarray(bw1, dtype=float))) and np.all(
-                np.isfinite(np.asarray(fw1, dtype=float))
-            ):
-                print(
-                    f"Ventanas onset ({zone_name}): "
-                    f"base=[{bw1[0]:.4f},{bw1[1]:.4f}] h "
-                    f"pico=[{fw1[0]:.4f},{fw1[1]:.4f}] h"
-                )
-            if peak_info.get("onset2_ok") and np.isfinite(peak_info.get("t_start2_h", np.nan)):
-                idx_on2 = int(np.abs(clean["t_h"].to_numpy() - peak_info["t_start2_h"]).argmin())
-                t_on2 = clean["T_muestra"].iloc[idx_on2]
-                p_on2 = clean["P_muestra"].iloc[idx_on2]
-                print(
-                    f"HF onset2 ({zone_name}): "
-                    f"t={peak_info['t_start2_h']:.4f} h, "
-                    f"HF={peak_info['hf_start2']:.6g} mW, "
-                    f"T={t_on2:.3f} °C, P={p_on2:.3f} bar"
-                )
-                bw2 = peak_info.get("baseline_window_onset2_h", (np.nan, np.nan))
-                fw2 = peak_info.get("flank_window_onset2_h", (np.nan, np.nan))
-                if np.all(np.isfinite(np.asarray(bw2, dtype=float))) and np.all(
-                    np.isfinite(np.asarray(fw2, dtype=float))
-                ):
-                    print(
-                        f"Ventanas onset2 ({zone_name}): "
-                        f"base=[{bw2[0]:.4f},{bw2[1]:.4f}] h "
-                        f"pico=[{fw2[0]:.4f},{fw2[1]:.4f}] h"
-                    )
-            t_char_50 = peak_info.get("t_char_50", np.nan)
-            if np.isfinite(t_char_50):
-                print(
-                    f"T_char_50 ({zone_name}): "
-                    f"t={t_char_50:.4f} h"
-                )
+            print_peak_summary(clean, peak_info, zone_name=zone_name)
     else:
         show_onset = args.onset_around is not None
         outname = f"{base_name}_panel_6plots.png"
@@ -1502,43 +1536,4 @@ if __name__ == "__main__":
             show_onset=show_onset,
         )
         if show_onset and peak_info is not None:
-            idx_on = int(np.abs(clean["t_h"].to_numpy() - peak_info["t_start_h"]).argmin())
-            t_on = clean["T_muestra"].iloc[idx_on]
-            p_on = clean["P_muestra"].iloc[idx_on]
-            print(
-                f"HF onset: t={peak_info['t_start_h']:.4f} h, "
-                f"HF={peak_info['hf_start']:.6g} mW, "
-                f"T={t_on:.3f} °C, P={p_on:.3f} bar"
-            )
-            bw1 = peak_info.get("baseline_window_onset_h", (np.nan, np.nan))
-            fw1 = peak_info.get("flank_window_onset_h", (np.nan, np.nan))
-            if np.all(np.isfinite(np.asarray(bw1, dtype=float))) and np.all(
-                np.isfinite(np.asarray(fw1, dtype=float))
-            ):
-                print(
-                    f"Ventanas onset: "
-                    f"base=[{bw1[0]:.4f},{bw1[1]:.4f}] h, "
-                    f"pico=[{fw1[0]:.4f},{fw1[1]:.4f}] h"
-                )
-            if peak_info.get("onset2_ok") and np.isfinite(peak_info.get("t_start2_h", np.nan)):
-                idx_on2 = int(np.abs(clean["t_h"].to_numpy() - peak_info["t_start2_h"]).argmin())
-                t_on2 = clean["T_muestra"].iloc[idx_on2]
-                p_on2 = clean["P_muestra"].iloc[idx_on2]
-                print(
-                    f"HF onset2: t={peak_info['t_start2_h']:.4f} h, "
-                    f"HF={peak_info['hf_start2']:.6g} mW, "
-                    f"T={t_on2:.3f} °C, P={p_on2:.3f} bar"
-                )
-                bw2 = peak_info.get("baseline_window_onset2_h", (np.nan, np.nan))
-                fw2 = peak_info.get("flank_window_onset2_h", (np.nan, np.nan))
-                if np.all(np.isfinite(np.asarray(bw2, dtype=float))) and np.all(
-                    np.isfinite(np.asarray(fw2, dtype=float))
-                ):
-                    print(
-                        f"Ventanas onset2: "
-                        f"base=[{bw2[0]:.4f},{bw2[1]:.4f}] h, "
-                        f"pico=[{fw2[0]:.4f},{fw2[1]:.4f}] h"
-                    )
-            t_char_50 = peak_info.get("t_char_50", np.nan)
-            if np.isfinite(t_char_50):
-                print(f"T_char_50: t={t_char_50:.4f} h")
+            print_peak_summary(clean, peak_info, zone_name=None)

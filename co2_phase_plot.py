@@ -110,11 +110,11 @@ def _infer_iso_label(path: Path) -> str:
     stem = path.stem
     m = re.search(r"[Dd](\d+)p(\d+)", stem)
     if m:
-        return f"isócora (NIST) D={m.group(1)}.{m.group(2)} g/ml"
+        return f"NIST isochore D={m.group(1)}.{m.group(2)} g/ml"
     m = re.search(r"[Dd]\s*=?\s*([0-9]*\.?[0-9]+)", stem)
     if m:
-        return f"isócora (NIST) D={m.group(1)} g/ml"
-    return f"isócora (NIST) {stem}"
+        return f"NIST isochore D={m.group(1)} g/ml"
+    return f"NIST isochore {stem}"
 
 
 def load_nist_sat_file(path: Path) -> pd.DataFrame:
@@ -155,47 +155,45 @@ def plot_co2_phase_with_data(
     df2=None,
     label_data2=None,
     sat_curve=None,
-    title="CO₂: P vs T con isócoras (NIST)",
+    title="CO2: P vs T with NIST isochores",
 ):
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    # Experimental data
-    ax.plot(
-        df["T_muestra"],
-        df["P_muestra"],
-        color="black",
-        linewidth=1.2,
-        alpha=0.9,
-        label=label_data,
-    )
-    if "P_referencia" in df.columns:
+    def _plot_experimental_track(df_track, label, line_kwargs, ref_kwargs):
         ax.plot(
-            df["T_muestra"],
-            df["P_referencia"],
-            color="dimgray",
-            linewidth=1.2,
-            alpha=0.9,
-            linestyle=":",
-            label=f"{label_data} (P referencia)",
+            df_track["T_muestra"],
+            df_track["P_muestra"],
+            label=label,
+            **line_kwargs,
         )
-    if df2 is not None:
-        ax.plot(
-            df2["T_muestra"],
-            df2["P_muestra"],
-            linewidth=1.2,
-            alpha=0.85,
-            linestyle="--",
-            label=label_data2 or "Este trabajo (2)",
-        )
-        if "P_referencia" in df2.columns:
+        if "P_referencia" in df_track.columns:
             ax.plot(
-                df2["T_muestra"],
-                df2["P_referencia"],
-                linewidth=1.1,
-                alpha=0.8,
-                linestyle="-.",
-                label=f"{label_data2 or 'Este trabajo (2)'} (P referencia)",
+                df_track["T_muestra"],
+                df_track["P_referencia"],
+                label=f"{label} (Reference P)",
+                **ref_kwargs,
             )
+
+    # Experimental data
+    _plot_experimental_track(
+        df,
+        label_data,
+        line_kwargs={"color": "black", "linewidth": 1.2, "alpha": 0.9},
+        ref_kwargs={
+            "color": "dimgray",
+            "linewidth": 1.2,
+            "alpha": 0.9,
+            "linestyle": ":",
+        },
+    )
+    if df2 is not None:
+        label2 = label_data2 or "Este trabajo (2)"
+        _plot_experimental_track(
+            df2,
+            label2,
+            line_kwargs={"linewidth": 1.2, "alpha": 0.85, "linestyle": "--"},
+            ref_kwargs={"linewidth": 1.1, "alpha": 0.8, "linestyle": "-."},
+        )
     if onset_point is not None:
         t_on, p_on = onset_point
         ax.scatter(
@@ -220,7 +218,7 @@ def plot_co2_phase_with_data(
             sat_curve["T"],
             sat_curve["P"],
             linewidth=1.5,
-            label="presión de vapor (NIST)",
+            label="Vapor pressure (NIST)",
         )
 
     # Triple and critical points
@@ -230,7 +228,7 @@ def plot_co2_phase_with_data(
         color="#cc0000",
         s=50,
         zorder=5,
-        label="Punto triple (NIST)",
+        label="Triple point (NIST)",
     )
     crit_t_c = CRIT_T_K - 273.15
     crit_p = CRIT_P_BAR
@@ -240,14 +238,14 @@ def plot_co2_phase_with_data(
         color="#0b2e88",
         s=50,
         zorder=5,
-        label="Punto crítico (NIST)",
+        label="Critical point (NIST)",
     )
     # Reference lines from critical point (as in the example figure)
     ax.axvline(crit_t_c, color="#4a4a4a", linewidth=1.0, alpha=0.8)
     ax.axhline(crit_p, color="#4a4a4a", linewidth=1.0, alpha=0.8)
 
-    ax.set_xlabel("Temperatura (°C)")
-    ax.set_ylabel("Presión (bar)")
+    ax.set_xlabel("Temperature (°C)")
+    ax.set_ylabel("Pressure (bar)")
     ax.set_title(title)
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc="best")
@@ -279,7 +277,7 @@ def run_with_config(cfg):
             if i < len(nist_iso_label) and nist_iso_label[i]:
                 label = nist_iso_label[i]
             elif density is not None:
-                label = f"isócora (NIST) D={density:.5g} g/ml"
+                label = f"NIST isochore D={density:.5g} g/ml"
             else:
                 label = _infer_iso_label(path)
             iso_curves.append((iso_df, label))
