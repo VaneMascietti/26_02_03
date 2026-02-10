@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from co2_phase_plot import _infer_iso_label, load_nist_iso_file
+from compare_pt_path_nist import _infer_iso_label, load_nist_iso_file
 
 
 def test_infer_iso_label_from_density_pattern():

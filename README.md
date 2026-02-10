@@ -1,8 +1,8 @@
 # 26_02_03 - Analisis DSC / Calvet
 
 Scripts para analizar ensayos `.lvm` y generar:
-- Panel de 6 graficos por ensayo o por zona (`analisis.py`)
-- Grafico de fase CO2 `P vs T` con isocoras NIST (`co2_phase_plot.py`)
+- Panel de 6 graficos por ensayo o por zona (`process_dsc_data.py`)
+- Grafico de fase CO2 `P vs T` con isocoras NIST (`compare_pt_path_nist.py`)
 
 ## Requisitos
 
@@ -25,25 +25,25 @@ pip install -r requirements.txt
 
 ## Estructura
 
-- `analisis.py`: carga `.lvm`, parsea zonas del PDF del programa, genera panel 6 y calcula onset/onset2.
-- `co2_phase_plot.py`: superpone trayectoria experimental con curvas NIST (isocoras y saturacion).
+- `process_dsc_data.py`: carga `.lvm`, parsea zonas del PDF del programa, genera panel 6 y calcula onset/onset2.
+- `compare_pt_path_nist.py`: superpone trayectoria experimental con curvas NIST (isocoras y saturacion).
 - `data/`: experimentos `.lvm` y programas `.pdf`.
 - `nist/`: tablas NIST locales.
-- `output/analisis/`: salidas de panel 6.
-- `output/phase/`: salidas de grafico de fase CO2.
+- `output/process_dsc_data/`: salidas de panel 6.
+- `output/compare_pt_path_nist/`: salidas de grafico de fase CO2.
 
-## Uso de `analisis.py`
+## Uso de `process_dsc_data.py`
 
 Comando base:
 
 ```bash
-.venv/bin/python analisis.py --data <archivo.lvm> --program <programa.pdf>
+.venv/bin/python process_dsc_data.py --data <archivo.lvm> --program <programa.pdf>
 ```
 
 Ejemplo por zona (zona 3):
 
 ```bash
-.venv/bin/python analisis.py \
+.venv/bin/python process_dsc_data.py \
   --data data/26_01_30_teste_oring_nitrilica.lvm \
   --program data/26_01_30_teste_oring_nitrilica.pdf \
   --zone 3
@@ -53,7 +53,7 @@ Seleccion por perfil de zona:
 
 ```bash
 # segundo Cooling del programa
-.venv/bin/python analisis.py --data <archivo.lvm> --program <programa.pdf> --Cooling 2
+.venv/bin/python process_dsc_data.py --data <archivo.lvm> --program <programa.pdf> --Cooling 2
 ```
 
 Parametros utiles de onset:
@@ -70,24 +70,24 @@ Parametros utiles de onset:
 ```
 
 Salida esperada:
-- Imagen: `output/analisis/<stem>_panel_6plots_zone<Z>.png` (si se usa zona)
+- Imagen: `output/process_dsc_data/<stem>_panel_6plots_zone<Z>.png` (si se usa zona)
 - Consola: valores de onset, onset2, y ventanas usadas:
   - `base=[t0,t1] h`
   - `pico=[t0,t1] h`
 
-## Uso de `co2_phase_plot.py`
+## Uso de `compare_pt_path_nist.py`
 
 Ejecucion con argumentos:
 
 ```bash
-.venv/bin/python co2_phase_plot.py \
+.venv/bin/python compare_pt_path_nist.py \
   --data data/26_02_07_teste_oring_vitom.lvm \
   --program data/26_02_07_teste_oring_vitom.pdf \
   --label "Vitom" \
   --nist-iso nist/nist_iso_D0p70000.txt \
   --nist-iso nist/nist_iso_D0p80000.txt \
   --nist-sat nist/co2_nist_sat.csv \
-  --out output/phase/co2_phase_overlay.png
+  --out output/compare_pt_path_nist/co2_phase_overlay.png
 ```
 
 Opcional:
@@ -96,11 +96,11 @@ Opcional:
 - `--data2` y `--label2`: segunda trayectoria experimental
 
 Salida esperada:
-- Imagen: `output/phase/co2_phase_overlay.png` (o el archivo indicado en `--out`)
+- Imagen: `output/compare_pt_path_nist/co2_phase_overlay.png` (o el archivo indicado en `--out`)
 
 ## Notas
 
-- `analisis.py` soporta dos formatos de `.lvm`:
+- `process_dsc_data.py` soporta dos formatos de `.lvm`:
   - Historico (9 columnas)
   - Nuevo (10 columnas, con `P_referencia` en penultima columna)
 - Si la zona no existe en el PDF, el script informa las zonas disponibles.
@@ -123,5 +123,5 @@ pytest -q
 Chequeo de sintaxis:
 
 ```bash
-python -m py_compile analisis.py co2_phase_plot.py
+python -m py_compile process_dsc_data.py compare_pt_path_nist.py
 ```

@@ -1508,7 +1508,7 @@ if __name__ == "__main__":
         outname = f"{base_name}_panel_6plots_zone{zone_info['num']}.png"
         peak_info = plot_panel_6(
             clean,
-            Path("output/analisis"),
+            Path("output/process_dsc_data"),
             outname=outname,
             zone_info=zone_info,
             show_zones=False,
@@ -1526,7 +1526,7 @@ if __name__ == "__main__":
         outname = f"{base_name}_panel_6plots.png"
         peak_info = plot_panel_6(
             clean,
-            Path("output/analisis"),
+            Path("output/process_dsc_data"),
             outname=outname,
             program_pdf=program_path,
             onset_method=args.onset_method,

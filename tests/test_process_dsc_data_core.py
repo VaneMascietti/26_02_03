@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from analisis import (
+from process_dsc_data import (
     _dedupe_repeated_suffix,
     _resolve_input_path,
     compute_onset_tangent,

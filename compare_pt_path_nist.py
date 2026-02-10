@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from analisis import load_lvm, DEFAULT_PROGRAM
+from process_dsc_data import load_lvm, DEFAULT_PROGRAM
 
 # NIST Phase Change Data (CO2) from NIST Chemistry WebBook, SRD 69
 # https://webbook.nist.gov/cgi/cbook.cgi?ID=C124389&Mask=4
@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
     "label": "Vitom + Niquel",
     "data2": None,
     "label2": "Nitrílica",
-    "out": "output/phase/co2_phase_overlay.png",
+    "out": "output/compare_pt_path_nist/co2_phase_overlay.png",
     "nist_iso": [],
     "nist_iso_label": [],
     "nist_sat": "nist/co2_nist_sat.csv",
