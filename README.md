@@ -4,6 +4,16 @@ Scripts para analizar ensayos `.lvm` y generar:
 - Panel de 6 graficos por ensayo o por zona (`process_dsc_data.py`)
 - Grafico de fase CO2 `P vs T` con isocoras NIST (`compare_pt_path_nist.py`)
 
+## Dónde Poner Datos
+
+- Inputs crudos LVM: `data/raw/lvm/`
+- Inputs crudos PDF: `data/raw/pdf/`
+- Compatibilidad legacy: si no existe en `data/raw/...`, el codigo busca en `data/`.
+
+Ejemplos:
+- `data/raw/lvm/26_01_30_teste_oring_nitrilica.lvm`
+- `data/raw/pdf/26_01_30_teste_oring_nitrilica.pdf`
+
 ## Requisitos
 
 - Python 3.10+
@@ -29,8 +39,9 @@ pip install -r requirements.txt
 - `compare_pt_path_nist.py`: superpone trayectoria experimental con curvas NIST (isocoras y saturacion).
 - `data/`: experimentos `.lvm` y programas `.pdf`.
 - `nist/`: tablas NIST locales.
-- `output/process_dsc_data/`: salidas de panel 6.
-- `output/compare_pt_path_nist/`: salidas de grafico de fase CO2.
+- `out/figures/`: figuras generadas.
+- `out/tables/`: tablas generadas.
+- `out/reports/`: reportes generados.
 
 ## Uso de `process_dsc_data.py`
 
@@ -44,8 +55,8 @@ Ejemplo por zona (zona 3):
 
 ```bash
 .venv/bin/python process_dsc_data.py \
-  --data data/26_01_30_teste_oring_nitrilica.lvm \
-  --program data/26_01_30_teste_oring_nitrilica.pdf \
+  --data 26_01_30_teste_oring_nitrilica.lvm \
+  --program 26_01_30_teste_oring_nitrilica.pdf \
   --zone 3
 ```
 
@@ -70,7 +81,7 @@ Parametros utiles de onset:
 ```
 
 Salida esperada:
-- Imagen: `output/process_dsc_data/<stem>_panel_6plots_zone<Z>.png` (si se usa zona)
+- Imagen: `out/figures/process_dsc_data/<stem>_panel_6plots_zone<Z>.png` (si se usa zona)
 - Consola: valores de onset, onset2, y ventanas usadas:
   - `base=[t0,t1] h`
   - `pico=[t0,t1] h`
@@ -81,13 +92,13 @@ Ejecucion con argumentos:
 
 ```bash
 .venv/bin/python compare_pt_path_nist.py \
-  --data data/26_02_07_teste_oring_vitom.lvm \
-  --program data/26_02_07_teste_oring_vitom.pdf \
+  --data 26_02_07_teste_oring_vitom.lvm \
+  --program 26_02_07_teste_oring_vitom.pdf \
   --label "Vitom" \
   --nist-iso nist/nist_iso_D0p70000.txt \
   --nist-iso nist/nist_iso_D0p80000.txt \
   --nist-sat nist/co2_nist_sat.csv \
-  --out output/compare_pt_path_nist/co2_phase_overlay.png
+  --out out/figures/compare_pt_path_nist/co2_phase_overlay.png
 ```
 
 Opcional:
@@ -96,7 +107,7 @@ Opcional:
 - `--data2` y `--label2`: segunda trayectoria experimental
 
 Salida esperada:
-- Imagen: `output/compare_pt_path_nist/co2_phase_overlay.png` (o el archivo indicado en `--out`)
+- Imagen: `out/figures/compare_pt_path_nist/co2_phase_overlay.png` (o el archivo indicado en `--out`)
 
 ## Notas
 
@@ -123,5 +134,5 @@ pytest -q
 Chequeo de sintaxis:
 
 ```bash
-python -m py_compile process_dsc_data.py compare_pt_path_nist.py
+python -m py_compile process_dsc_data.py compare_pt_path_nist.py util/path.py
 ```

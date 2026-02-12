@@ -19,6 +19,16 @@ Thumbs.db
 
 # Project outputs
 output/
+out/
+
+# Raw inputs (local, not versioned)
+data/raw/
+
+# Instrument files
+*.lvm
+*.tdms
+# Optional: uncomment if instrument PDFs should not be versioned
+# *.pdf
 
 # Windows metadata artifacts
 *:Zone.Identifier

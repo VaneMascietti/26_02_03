@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import pandas as pd
 import re
+from util.path import get_data_path, get_output_dir
 
 DEFAULT_DATA = "data/26_01_28_teste_oring_vitom.lvm"
 DEFAULT_PROGRAM = "data/26_01_28_teste_oring_vitom.pdf"
@@ -1039,7 +1040,7 @@ def plot_panel_6(
     zone_colors = {}
     if show_zones:
         if program_pdf is None:
-            program_pdf = Path(DEFAULT_PROGRAM)
+            program_pdf = get_data_path(DEFAULT_PROGRAM, "pdf")
         zone_spans = get_zone_spans(clean, program_pdf)
         if not zone_spans:
             iso_spans = detect_isotherm_spans(
@@ -1434,8 +1435,10 @@ if __name__ == "__main__":
 
     raw_data_path = Path(args.data)
     raw_program_path = Path(args.program)
-    data_path = _resolve_input_path(raw_data_path, expected_suffix=".lvm")
-    program_path = _resolve_input_path(raw_program_path, expected_suffix=".pdf")
+    resolved_data_input = _resolve_input_path(raw_data_path, expected_suffix=".lvm")
+    resolved_program_input = _resolve_input_path(raw_program_path, expected_suffix=".pdf")
+    data_path = get_data_path(resolved_data_input, "lvm")
+    program_path = get_data_path(resolved_program_input, "pdf")
 
     if not data_path.exists():
         raise SystemExit(f"Archivo .lvm no encontrado: {raw_data_path}")
@@ -1508,7 +1511,7 @@ if __name__ == "__main__":
         outname = f"{base_name}_panel_6plots_zone{zone_info['num']}.png"
         peak_info = plot_panel_6(
             clean,
-            Path("output/process_dsc_data"),
+            get_output_dir("figures", "process_dsc_data"),
             outname=outname,
             zone_info=zone_info,
             show_zones=False,
@@ -1526,7 +1529,7 @@ if __name__ == "__main__":
         outname = f"{base_name}_panel_6plots.png"
         peak_info = plot_panel_6(
             clean,
-            Path("output/process_dsc_data"),
+            get_output_dir("figures", "process_dsc_data"),
             outname=outname,
             program_pdf=program_path,
             onset_method=args.onset_method,

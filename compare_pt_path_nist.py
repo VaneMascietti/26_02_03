@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from process_dsc_data import load_lvm, DEFAULT_PROGRAM
+from util.path import ensure_out_layout, get_data_path, get_output_dir
 
 # NIST Phase Change Data (CO2) from NIST Chemistry WebBook, SRD 69
 # https://webbook.nist.gov/cgi/cbook.cgi?ID=C124389&Mask=4
@@ -19,12 +20,12 @@ ONSET_P_BAR = 141.3
 
 # Configura tus inputs aca y corre el script sin flags.
 DEFAULT_CONFIG = {
-    "data": "data/26_01_28_teste_oring_vitom.lvm",
+    "data": "26_01_28_teste_oring_vitom.lvm",
     "program": DEFAULT_PROGRAM,
     "label": "Vitom + Niquel",
     "data2": None,
     "label2": "Nitrílica",
-    "out": "output/compare_pt_path_nist/co2_phase_overlay.png",
+    "out": "out/figures/compare_pt_path_nist/co2_phase_overlay.png",
     "nist_iso": [],
     "nist_iso_label": [],
     "nist_sat": "nist/co2_nist_sat.csv",
@@ -256,15 +257,24 @@ def plot_co2_phase_with_data(
 
 
 def run_with_config(cfg):
-    data_path = Path(cfg["data"])
+    ensure_out_layout()
+    data_path = get_data_path(cfg["data"], "lvm")
     program_value = cfg.get("program")
-    program_path = Path(program_value) if program_value else None
+    program_path = get_data_path(program_value, "pdf") if program_value else None
     clean = load_lvm(data_path, program_pdf=program_path)
     clean2 = None
     if cfg.get("data2"):
-        clean2 = load_lvm(Path(cfg["data2"]), program_pdf=program_path)
+        clean2 = load_lvm(get_data_path(cfg["data2"], "lvm"), program_pdf=program_path)
 
     outpath = Path(cfg["out"])
+    if (
+        not outpath.is_absolute()
+        and outpath.parts
+        and outpath.parts[0] == "output"
+    ):
+        outpath = Path(str(outpath).replace("output/", "out/", 1))
+    if len(outpath.parts) == 1:
+        outpath = get_output_dir("figures", "compare_pt_path_nist") / outpath.name
     outpath.parent.mkdir(parents=True, exist_ok=True)
     onset_point = (ONSET_T_C, ONSET_P_BAR) if cfg.get("show_onset", False) else None
     iso_curves = []

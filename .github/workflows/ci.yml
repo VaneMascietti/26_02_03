@@ -28,7 +28,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Syntax check
-        run: python -m py_compile process_dsc_data.py compare_pt_path_nist.py
+        run: python -m py_compile process_dsc_data.py compare_pt_path_nist.py util/path.py
 
       - name: Run tests
         run: pytest -q
