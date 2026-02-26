@@ -824,14 +824,59 @@ def load_program_zones(pdf_path: Path):
         if m:
             zone_headers.append((i, int(m.group(1)), m.group(2).strip()))
 
+    # Some PDF exports split headers at page boundaries and PyPDF2 can
+    # extract lines like "Page 37 : Cooling" instead of "7 : Cooling".
+    # Infer the missing zone number from neighboring headers.
+    page_header_candidates = []
+    for i, line in enumerate(lines):
+        m = re.match(r"\s*Page\s+\d+\s*:\s*(.+)\s*$", line, flags=re.IGNORECASE)
+        if not m:
+            continue
+        typ = m.group(1).strip()
+        typ_l = typ.lower()
+        if typ_l.startswith(("cooling", "heating", "isoterma", "isothermal", "return")):
+            page_header_candidates.append((i, typ))
+
+    if page_header_candidates and zone_headers:
+        existing_nums = {num for _, num, _ in zone_headers}
+        explicit_by_index = sorted(zone_headers, key=lambda x: x[0])
+        inferred_headers = []
+
+        for i, typ in page_header_candidates:
+            prev = None
+            nxt = None
+            for h in explicit_by_index:
+                if h[0] < i:
+                    prev = h
+                elif h[0] > i:
+                    nxt = h
+                    break
+
+            inferred_num = None
+            if prev and nxt and (nxt[1] - prev[1] == 2):
+                inferred_num = prev[1] + 1
+            elif prev and (prev[1] + 1) not in existing_nums:
+                inferred_num = prev[1] + 1
+            elif nxt and (nxt[1] - 1) > 0 and (nxt[1] - 1) not in existing_nums:
+                inferred_num = nxt[1] - 1
+
+            if inferred_num and inferred_num not in existing_nums:
+                inferred_headers.append((i, inferred_num, typ))
+                existing_nums.add(inferred_num)
+
+        if inferred_headers:
+            zone_headers.extend(inferred_headers)
+            zone_headers.sort(key=lambda x: x[0])
+
     zones = []
     for idx, (i, num, typ) in enumerate(zone_headers):
         j = zone_headers[idx + 1][0] if idx + 1 < len(zone_headers) else len(lines)
         duration = None
         for line in lines[i:j]:
-            m = re.search(r"Total duration:\s*(\d+)\s*s", line)
+            m = re.search(r"Total duration:\s*([0-9]+(?:\.[0-9]+)?)\s*s", line)
             if m:
-                duration = int(m.group(1))
+                d_val = float(m.group(1))
+                duration = int(d_val) if d_val.is_integer() else d_val
                 break
         if duration is None:
             continue
@@ -977,6 +1022,7 @@ def plot_panel_6(
     onset_window_h=2.0,
     onset_flank_near_peak_frac=0.15,
     show_onset=False,
+    show_reference_pressure=False,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -984,6 +1030,7 @@ def plot_panel_6(
         t_h = clean["t_h"].to_numpy()
     else:
         t_h = clean["t_s"].to_numpy() / 3600.0
+    has_reference_pressure = show_reference_pressure and "P_referencia" in clean.columns
     turns = detect_ramp_turns(t_h, clean["T_horno"].to_numpy(), min_sep_h=5.0)
     peak_info = None
     onset_idx = None
@@ -1060,7 +1107,7 @@ def plot_panel_6(
     # 1) P vs t
     ax = axes[0, 0]
     ax.plot(t_h, clean["P_muestra"], color="black", label="Sample P")
-    if "P_referencia" in clean.columns:
+    if has_reference_pressure:
         ax.plot(
             t_h,
             clean["P_referencia"],
@@ -1079,13 +1126,13 @@ def plot_panel_6(
             ax.axvspan(t0, t1, color="gray", alpha=0.15, linewidth=0)
     ax.set_xlabel("t (h)")
     ax.set_ylabel("Pressure (bar)")
-    if "P_referencia" in clean.columns:
+    if has_reference_pressure:
         ax.legend(loc="best", fontsize=8)
 
     # 2) P vs T
     ax = axes[0, 1]
     ax.plot(clean["T_muestra"], clean["P_muestra"], color="black", label="Sample P")
-    if "P_referencia" in clean.columns:
+    if has_reference_pressure:
         ax.plot(
             clean["T_muestra"],
             clean["P_referencia"],
@@ -1096,7 +1143,7 @@ def plot_panel_6(
         )
     ax.set_xlabel("T (°C)")
     ax.set_ylabel("Pressure (bar)")
-    if "P_referencia" in clean.columns:
+    if has_reference_pressure:
         ax.legend(loc="best", fontsize=8)
 
     # 3) T vs t
@@ -1399,6 +1446,16 @@ if __name__ == "__main__":
     parser.add_argument("--Isoterma", type=int, default=None, help="Seleccionar Isoterma N (ej: --Isoterma 1)")
     parser.add_argument("--Return", type=int, default=None, help="Seleccionar Return N (ej: --Return 1)")
     parser.add_argument(
+        "--all-cooling",
+        action="store_true",
+        help="Generar gráficos para todas las zonas Cooling del programa.",
+    )
+    parser.add_argument(
+        "--all-heating",
+        action="store_true",
+        help="Generar gráficos para todas las zonas Heating del programa.",
+    )
+    parser.add_argument(
         "--no-rebase",
         action="store_true",
         help="Mantener tiempo absoluto al filtrar por zona",
@@ -1431,6 +1488,13 @@ if __name__ == "__main__":
             "quede cerca del pico (menor = más cerca)"
         ),
     )
+    parser.add_argument(
+        "--show-reference-pressure",
+        dest="show_reference_pressure",
+        action="store_true",
+        default=False,
+        help="Mostrar presión de referencia en los gráficos P vs t y P vs T (por defecto no se muestra).",
+    )
     args = parser.parse_args()
 
     raw_data_path = Path(args.data)
@@ -1449,7 +1513,9 @@ if __name__ == "__main__":
         print(f"Usando PDF del programa: {program_path}")
 
     clean = load_lvm(data_path, program_pdf=program_path)
+    show_reference_pressure = bool(args.show_reference_pressure)
     zone_info = None
+
     def zone_num_from_profile(zones_all, ztype, ordinal):
         if zones_all is None or ordinal is None:
             return None
@@ -1458,6 +1524,11 @@ if __name__ == "__main__":
             return None
         return matches[ordinal - 1]["num"]
 
+    def zone_nums_by_type(zones_all, ztype):
+        if zones_all is None:
+            return []
+        return [z["num"] for z in zones_all if z["type"].lower().startswith(ztype.lower())]
+
     zones_all = None
     zone_requested = (
         args.zone is not None
@@ -1465,6 +1536,8 @@ if __name__ == "__main__":
         or args.Heating is not None
         or args.Isoterma is not None
         or args.Return is not None
+        or args.all_cooling
+        or args.all_heating
     )
     if zone_requested:
         # Cuando el usuario pide una zona por número/perfil, debe respetar
@@ -1478,7 +1551,7 @@ if __name__ == "__main__":
                 "virtual (ej: .venv/bin/python)."
             )
 
-    zone_num = None
+    requested_zone_nums = []
     if args.zone is not None:
         available_nums = [z["num"] for z in zones_all] if zones_all else []
         if available_nums and args.zone not in available_nums:
@@ -1487,43 +1560,64 @@ if __name__ == "__main__":
                 f"Zona {args.zone} no encontrada en el PDF. "
                 f"Zonas disponibles: {nums_txt}."
             )
-        zone_num = args.zone
+        requested_zone_nums.append(args.zone)
     elif args.Cooling is not None:
         zone_num = zone_num_from_profile(zones_all, "Cooling", args.Cooling)
+        if zone_num is None:
+            raise SystemExit(f"Cooling {args.Cooling} no encontrado en el PDF.")
+        requested_zone_nums.append(zone_num)
     elif args.Heating is not None:
         zone_num = zone_num_from_profile(zones_all, "Heating", args.Heating)
+        if zone_num is None:
+            raise SystemExit(f"Heating {args.Heating} no encontrado en el PDF.")
+        requested_zone_nums.append(zone_num)
     elif args.Isoterma is not None:
         zone_num = zone_num_from_profile(zones_all, "Isoterma", args.Isoterma)
+        if zone_num is None:
+            raise SystemExit(f"Isoterma {args.Isoterma} no encontrada en el PDF.")
+        requested_zone_nums.append(zone_num)
     elif args.Return is not None:
         zone_num = zone_num_from_profile(zones_all, "Return", args.Return)
+        if zone_num is None:
+            raise SystemExit(f"Return {args.Return} no encontrada en el PDF.")
+        requested_zone_nums.append(zone_num)
+
+    if args.all_cooling:
+        requested_zone_nums.extend(zone_nums_by_type(zones_all, "Cooling"))
+    if args.all_heating:
+        requested_zone_nums.extend(zone_nums_by_type(zones_all, "Heating"))
 
     base_name = data_path.stem
-    if zone_num is not None:
-        clean, zone_info = select_zone(
-            clean,
-            zone_num,
-            program_path,
-            rebase_time=not args.no_rebase,
-        )
-        if zone_info is None:
-            raise SystemExit("Zona no encontrada en el PDF.")
-        zone_name = zone_label(zones_all, zone_num) if zones_all else f"Zona {zone_num}"
-        outname = f"{base_name}_panel_6plots_zone{zone_info['num']}.png"
-        peak_info = plot_panel_6(
-            clean,
-            get_output_dir("figures", "process_dsc_data"),
-            outname=outname,
-            zone_info=zone_info,
-            show_zones=False,
-            program_pdf=program_path,
-            onset_method=args.onset_method,
-            onset_center_h=args.onset_around,
-            onset_window_h=args.onset_window,
-            onset_flank_near_peak_frac=args.flank_near_peak_frac,
-            show_onset=True,
-        )
-        if peak_info is not None:
-            print_peak_summary(clean, peak_info, zone_name=zone_name)
+    if requested_zone_nums:
+        zone_num_set = set(requested_zone_nums)
+        zone_nums_ordered = [z["num"] for z in zones_all if z["num"] in zone_num_set]
+        for zone_num in zone_nums_ordered:
+            zone_clean, zone_info = select_zone(
+                clean,
+                zone_num,
+                program_path,
+                rebase_time=not args.no_rebase,
+            )
+            if zone_info is None:
+                raise SystemExit(f"Zona {zone_num} no encontrada en el PDF.")
+            zone_name = zone_label(zones_all, zone_num) if zones_all else f"Zona {zone_num}"
+            outname = f"{base_name}_panel_6plots_zone{zone_info['num']}.png"
+            peak_info = plot_panel_6(
+                zone_clean,
+                get_output_dir("figures", "process_dsc_data"),
+                outname=outname,
+                zone_info=zone_info,
+                show_zones=False,
+                program_pdf=program_path,
+                onset_method=args.onset_method,
+                onset_center_h=args.onset_around,
+                onset_window_h=args.onset_window,
+                onset_flank_near_peak_frac=args.flank_near_peak_frac,
+                show_onset=True,
+                show_reference_pressure=show_reference_pressure,
+            )
+            if peak_info is not None:
+                print_peak_summary(zone_clean, peak_info, zone_name=zone_name)
     else:
         show_onset = args.onset_around is not None
         outname = f"{base_name}_panel_6plots.png"
@@ -1537,6 +1631,7 @@ if __name__ == "__main__":
             onset_window_h=args.onset_window,
             onset_flank_near_peak_frac=args.flank_near_peak_frac,
             show_onset=show_onset,
+            show_reference_pressure=show_reference_pressure,
         )
         if show_onset and peak_info is not None:
             print_peak_summary(clean, peak_info, zone_name=None)

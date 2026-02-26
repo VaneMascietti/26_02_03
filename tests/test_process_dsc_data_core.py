@@ -7,6 +7,7 @@ from process_dsc_data import (
     _resolve_input_path,
     compute_onset_tangent,
     detect_zones_from_temperature,
+    load_program_zones,
 )
 
 
@@ -52,3 +53,75 @@ def test_compute_onset_tangent_on_synthetic_peak():
     assert result["x_onset"] < result["x_peak"]
     assert np.isfinite(result["flank_window"][0])
     assert np.isfinite(result["flank_window"][1])
+
+
+def test_load_program_zones_infers_header_when_page_prefix_appears(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "program.pdf"
+    pdf_path.write_text("", encoding="utf-8")
+
+    extracted = "\n".join(
+        [
+            "6 : Isoterma",
+            "Total duration: 21600 s",
+            "Page 37 : Cooling",
+            "Total duration: 66000 s",
+            "8 : Isoterma",
+            "Total duration: 21600 s",
+        ]
+    )
+
+    class _FakePage:
+        def extract_text(self):
+            return extracted
+
+    class _FakeReader:
+        def __init__(self, _):
+            self.pages = [_FakePage()]
+
+    class _FakePyPDF2:
+        PdfReader = _FakeReader
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "PyPDF2", _FakePyPDF2)
+    zones = load_program_zones(pdf_path)
+
+    nums = [z["num"] for z in zones]
+    assert nums == [6, 7, 8]
+    z7 = next(z for z in zones if z["num"] == 7)
+    assert z7["type"].lower().startswith("cooling")
+    assert z7["duration_s"] == 66000
+
+
+def test_load_program_zones_accepts_decimal_duration(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "program_decimal.pdf"
+    pdf_path.write_text("", encoding="utf-8")
+
+    extracted = "\n".join(
+        [
+            "1 : Inicio",
+            "Total duration: 2666.7 s",
+            "2 : Isoterma",
+            "Total duration: 21600 s",
+        ]
+    )
+
+    class _FakePage:
+        def extract_text(self):
+            return extracted
+
+    class _FakeReader:
+        def __init__(self, _):
+            self.pages = [_FakePage()]
+
+    class _FakePyPDF2:
+        PdfReader = _FakeReader
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "PyPDF2", _FakePyPDF2)
+    zones = load_program_zones(pdf_path)
+
+    assert zones[0]["num"] == 1
+    assert zones[0]["type"].lower().startswith("inicio")
+    assert zones[0]["duration_s"] == 2666.7
