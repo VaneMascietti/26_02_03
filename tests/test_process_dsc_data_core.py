@@ -1,12 +1,15 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from process_dsc_data import (
     _dedupe_repeated_suffix,
+    _extra_onsets_from_temperature_targets,
     _resolve_input_path,
     compute_onset_tangent,
     detect_zones_from_temperature,
+    load_lvm,
     load_program_zones,
 )
 
@@ -125,3 +128,46 @@ def test_load_program_zones_accepts_decimal_duration(tmp_path, monkeypatch):
     assert zones[0]["num"] == 1
     assert zones[0]["type"].lower().startswith("inicio")
     assert zones[0]["duration_s"] == 2666.7
+
+
+def test_load_lvm_ignores_blank_leading_column_with_nul_footer(tmp_path):
+    lvm_path = tmp_path / "sample.lvm"
+    lvm_path.write_bytes(
+        (
+            b"\t300\t34.66\t307.4\t28030.5\t59.388103\t59.999531\t21.513342\t0.584247\t0.0\t2/27/2026 3:26:14 PM\n"
+            b"\t300\t34.66\t307.3\t4.0\t19.914864\t19.997200\t6410.243652\t178.607569\t0.0\t2/27/2026 3:26:15 PM\n"
+            b"\t300\t34.66\t307.2\t5.0\t19.914770\t19.997231\t6387.470215\t177.973052\t0.0\t2/27/2026 3:26:16 PM\n"
+            b"\x00\x00\x00\t\t\t\t\t\t\t\t\t\n"
+        )
+    )
+
+    df = load_lvm(lvm_path)
+
+    assert len(df) == 2
+    assert np.allclose(df["P_bomba_bar"].to_numpy(), [300.0, 300.0])
+    assert np.allclose(df["P_muestra"].to_numpy(), [307.3, 307.2])
+    assert np.allclose(df["T_muestra"].to_numpy(), [19.914864, 19.914770])
+    assert np.allclose(df["HF_mW"].to_numpy(), [178.607569, 177.973052])
+
+
+def test_extra_onsets_from_temperature_targets_maps_to_nearest_points():
+    clean = pd.DataFrame(
+        {
+            "t_h": np.array([0.0, 1.0, 2.0, 3.0], dtype=float),
+            "T_muestra": np.array([40.6, 16.1, 11.0, 5.0], dtype=float),
+            "P_muestra": np.array([300.0, 280.0, 272.0, 260.0], dtype=float),
+            "HF_mW": np.array([5.0, 6.0, 10.0, 2.0], dtype=float),
+        }
+    )
+    extras = _extra_onsets_from_temperature_targets(
+        clean,
+        [40.64, 16.09, 10.98],
+        excluded_indices=[1],
+    )
+
+    # index 1 is excluded, so only 40.6 and 11.0 remain
+    assert len(extras) == 2
+    assert extras[0]["idx"] == 0
+    assert extras[1]["idx"] == 2
+    assert abs(extras[0]["target_T_C"] - 40.64) < 1e-9
+    assert abs(extras[1]["target_T_C"] - 10.98) < 1e-9

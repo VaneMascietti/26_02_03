@@ -50,14 +50,51 @@ def _resolve_input_path(path: Path, expected_suffix: str | None = None) -> Path:
 
     return path
 
+
+def _series_is_effectively_blank(series: pd.Series) -> bool:
+    normalized = (
+        series.fillna("")
+        .astype(str)
+        .str.replace("\x00", "", regex=False)
+        .str.strip()
+    )
+    return normalized.eq("").all()
+
+
+def _drop_leading_counter_wrap(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Some exports prepend one or a few stale rows from the previous segment.
+    Detect an abrupt wrap in the internal counter right at the file start and
+    trim only that leading prefix.
+    """
+    if "_col4" not in df.columns or len(df) < 2:
+        return df
+
+    counter = pd.to_numeric(df["_col4"], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(counter[0]):
+        return df
+
+    wrap_points = np.where(np.diff(counter) < -100.0)[0] + 1
+    if wrap_points.size == 0:
+        return df
+
+    first_wrap = int(wrap_points[0])
+    if first_wrap > 5:
+        return df
+    if not np.isfinite(counter[first_wrap]):
+        return df
+    if counter[0] < 100.0 or counter[first_wrap] > 10.0:
+        return df
+
+    return df.iloc[first_wrap:].reset_index(drop=True)
+
+
 def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t", header=None, engine="python")
     # LVM can start with a leading tab, creating an empty first column
-    if df.shape[1] >= 1:
-        first = df.iloc[:, 0]
-        if first.isna().all() or first.astype(str).str.strip().eq("").all():
-            df = df.iloc[:, 1:].copy()
-            df.columns = range(df.shape[1])
+    while df.shape[1] >= 1 and _series_is_effectively_blank(df.iloc[:, 0]):
+        df = df.iloc[:, 1:].copy()
+        df.columns = range(df.shape[1])
 
     # Layout histórico: 9 columnas (última = datetime).
     # Layout nuevo: 10 columnas (penúltima = P de referencia, última = datetime).
@@ -76,10 +113,15 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
     if df.shape[1] >= 10:
         rename_map[datetime_col - 1] = "P_referencia_bar"
     df = df.rename(columns=rename_map)
+    df = _drop_leading_counter_wrap(df)
 
     df["datetime"] = pd.to_datetime(
         df["datetime"], format="%m/%d/%Y %I:%M:%S %p", errors="coerce"
     )
+    df = df.loc[df["datetime"].notna()].copy()
+    if df.empty:
+        raise ValueError(f"No valid datetime rows found in {path}")
+    df = df.reset_index(drop=True)
     t0 = df["datetime"].iloc[0]
     df["t_s"] = (df["datetime"] - t0).dt.total_seconds()
     sample_time_s = np.arange(len(df), dtype=float) * 0.5
@@ -1023,6 +1065,7 @@ def plot_panel_6(
     onset_flank_near_peak_frac=0.15,
     show_onset=False,
     show_reference_pressure=False,
+    extra_onset_temps_c=None,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -1035,6 +1078,7 @@ def plot_panel_6(
     peak_info = None
     onset_idx = None
     onset2_idx = None
+    extra_onsets = []
     if show_onset:
         if onset_method == "tangent":
             res = compute_onset_tangent(
@@ -1082,6 +1126,13 @@ def plot_panel_6(
             )
             if peak_info is not None:
                 onset_idx = int(np.abs(t_h - peak_info["t_start_h"]).argmin())
+    extra_onsets = _extra_onsets_from_temperature_targets(
+        clean,
+        extra_onset_temps_c,
+        excluded_indices=[onset_idx, onset2_idx],
+    )
+    if peak_info is not None and extra_onsets:
+        peak_info["extra_onsets"] = extra_onsets
     zone_spans = []
     iso_spans = []
     zone_colors = {}
@@ -1207,6 +1258,27 @@ def plot_panel_6(
             color="magenta",
             bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
         )
+    extra_offsets = [(12, 12), (12, -12), (-48, 12), (-48, -12)]
+    for i, onset_extra in enumerate(extra_onsets, 1):
+        dx, dy = extra_offsets[(i - 1) % len(extra_offsets)]
+        ax.plot(
+            onset_extra["T_C"],
+            onset_extra["HF_mW"],
+            marker="o",
+            color="teal",
+            markersize=4,
+        )
+        ax.annotate(
+            f"{onset_extra['T_C']:.2f} °C",
+            xy=(onset_extra["T_C"], onset_extra["HF_mW"]),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            fontsize=7,
+            ha="left",
+            va="bottom" if dy >= 0 else "top",
+            color="teal",
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
+        )
     ax.set_xlabel("T (°C)")
     ax.set_ylabel("HF (mW)")
 
@@ -1288,31 +1360,59 @@ def plot_panel_6(
         if onset2_idx is not None:
             ax.plot(peak_info["t_start2_h"], peak_info["hf_start2"], "mo", markersize=5, zorder=5)
             ax.axvline(peak_info["t_start2_h"], color="magenta", linewidth=0.8, alpha=0.6)
+        t_min = float(np.nanmin(t_h))
+        t_max = float(np.nanmax(t_h))
+        t_span = max(t_max - t_min, 1e-9)
+
+        def _onset_text_side(x_val: float, y_off: float) -> tuple[tuple[float, float], str]:
+            # Prefer labels on the left of the point to avoid overlap on right-side peaks.
+            if x_val <= t_min + 0.15 * t_span:
+                return (12, y_off), "left"
+            return (-12, y_off), "right"
+
+        onset_xytext, onset_ha = _onset_text_side(float(peak_info["t_start_h"]), 12)
         ax.annotate(
             f"ONSET\\n{peak_info['t_start_h']:.2f} h\\n{peak_info['hf_start']:.3g} mW",
             xy=(peak_info["t_start_h"], peak_info["hf_start"]),
-            xytext=(12, 12),
+            xytext=onset_xytext,
             textcoords="offset points",
             fontsize=7,
-            ha="left",
+            ha=onset_ha,
             va="bottom",
             color="blue",
             bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
         )
         if onset2_idx is not None:
+            onset2_xytext, onset2_ha = _onset_text_side(float(peak_info["t_start2_h"]), 28)
             ax.annotate(
                 f"ONSET2\\n{peak_info['t_start2_h']:.2f} h\\n{peak_info['hf_start2']:.3g} mW",
                 xy=(peak_info["t_start2_h"], peak_info["hf_start2"]),
-                xytext=(12, 28),
+                xytext=onset2_xytext,
                 textcoords="offset points",
                 fontsize=7,
-                ha="left",
+                ha=onset2_ha,
                 va="bottom",
                 color="magenta",
                 bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
             )
+    for i, onset_extra in enumerate(extra_onsets, 1):
+        ax.plot(
+            onset_extra["t_h"],
+            onset_extra["HF_mW"],
+            marker="o",
+            color="teal",
+            markersize=4,
+            zorder=5,
+        )
+        ax.axvline(
+            onset_extra["t_h"],
+            color="teal",
+            linewidth=0.8,
+            alpha=0.6,
+            linestyle=":",
+        )
     if show_onset2_fit or show_baseline_window:
-        ax.legend(loc="lower left", fontsize=7)
+        ax.legend(loc="upper right", fontsize=7, framealpha=0.85)
     ax.set_xlabel("t (h)")
     ax.set_ylabel("HF (mW)")
 
@@ -1360,6 +1460,14 @@ def plot_panel_6(
             color="magenta",
             bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
         )
+    for i, onset_extra in enumerate(extra_onsets, 1):
+        ax.plot(
+            onset_extra["P_bar"],
+            onset_extra["HF_mW"],
+            marker="o",
+            color="teal",
+            markersize=4,
+        )
     ax.set_xlabel("P (bar)")
     ax.set_ylabel("HF (mW)")
 
@@ -1374,6 +1482,56 @@ def _nearest_tp_at_time(clean: pd.DataFrame, t_on_h: float) -> tuple[float, floa
     t_on = float(clean["T_muestra"].iloc[idx])
     p_on = float(clean["P_muestra"].iloc[idx])
     return t_on, p_on
+
+
+def _extra_onsets_from_temperature_targets(clean, target_temps_c, excluded_indices=None):
+    """
+    Map target temperatures (°C) to nearest samples in the current dataset.
+    Returns list of dicts with t/T/P/HF for annotation.
+    """
+    if not target_temps_c:
+        return []
+
+    t_arr = (
+        clean["t_h"].to_numpy(dtype=float)
+        if "t_h" in clean
+        else clean["t_s"].to_numpy(dtype=float) / 3600.0
+    )
+    temp_arr = clean["T_muestra"].to_numpy(dtype=float)
+    p_arr = clean["P_muestra"].to_numpy(dtype=float)
+    hf_arr = clean["HF_mW"].to_numpy(dtype=float)
+
+    finite_temp = np.isfinite(temp_arr)
+    if not finite_temp.any():
+        return []
+
+    used = set()
+    if excluded_indices is not None:
+        used.update(i for i in excluded_indices if i is not None)
+
+    out = []
+    for target in target_temps_c:
+        if target is None or not np.isfinite(float(target)):
+            continue
+        dist = np.abs(temp_arr - float(target))
+        dist[~finite_temp] = np.inf
+        idx = int(np.argmin(dist))
+        if not np.isfinite(dist[idx]) or idx in used:
+            continue
+        used.add(idx)
+        out.append(
+            {
+                "idx": idx,
+                "target_T_C": float(target),
+                "T_C": float(temp_arr[idx]),
+                "P_bar": float(p_arr[idx]),
+                "HF_mW": float(hf_arr[idx]),
+                "t_h": float(t_arr[idx]),
+            }
+        )
+
+    out.sort(key=lambda item: item["t_h"])
+    return out
 
 
 def _print_onset_windows(kind: str, bw, fw, zone_name: str | None = None) -> None:
@@ -1429,6 +1587,17 @@ def print_peak_summary(clean: pd.DataFrame, peak_info: dict, zone_name: str | No
     t_char_50 = peak_info.get("t_char_50", np.nan)
     if np.isfinite(t_char_50):
         print(f"T_char_50{zone_suffix}: t={t_char_50:.4f} h")
+
+    extras = peak_info.get("extra_onsets", [])
+    for i, onset_extra in enumerate(extras, 1):
+        print(
+            f"HF onset_extra{i}{zone_suffix}: "
+            f"t={onset_extra['t_h']:.4f} h, "
+            f"HF={onset_extra['HF_mW']:.6g} mW, "
+            f"T={onset_extra['T_C']:.3f} °C, "
+            f"P={onset_extra['P_bar']:.3f} bar, "
+            f"T_target={onset_extra['target_T_C']:.3f} °C"
+        )
 
 
 if __name__ == "__main__":
@@ -1494,6 +1663,16 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="Mostrar presión de referencia en los gráficos P vs t y P vs T (por defecto no se muestra).",
+    )
+    parser.add_argument(
+        "--extra-onset-temp",
+        type=float,
+        action="append",
+        default=[],
+        help=(
+            "Temperatura objetivo (°C) para marcar onsets extra en HF. "
+            "Puede repetirse: --extra-onset-temp 40.64 --extra-onset-temp 16.09"
+        ),
     )
     args = parser.parse_args()
 
@@ -1615,6 +1794,7 @@ if __name__ == "__main__":
                 onset_flank_near_peak_frac=args.flank_near_peak_frac,
                 show_onset=True,
                 show_reference_pressure=show_reference_pressure,
+                extra_onset_temps_c=args.extra_onset_temp,
             )
             if peak_info is not None:
                 print_peak_summary(zone_clean, peak_info, zone_name=zone_name)
@@ -1632,6 +1812,7 @@ if __name__ == "__main__":
             onset_flank_near_peak_frac=args.flank_near_peak_frac,
             show_onset=show_onset,
             show_reference_pressure=show_reference_pressure,
+            extra_onset_temps_c=args.extra_onset_temp,
         )
         if show_onset and peak_info is not None:
             print_peak_summary(clean, peak_info, zone_name=None)
