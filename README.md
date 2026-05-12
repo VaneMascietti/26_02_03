@@ -86,6 +86,43 @@ Salida esperada:
   - `base=[t0,t1] h`
   - `pico=[t0,t1] h`
 
+## Uso por metadata experimental
+
+Para experimentos divididos en varias corridas, usar:
+
+```bash
+.venv/bin/python process_experiments_from_metadata.py --metadata data/metadata/experiments.csv
+```
+
+Cada fila de `data/metadata/experiments.csv` representa un archivo `.lvm`. Las columnas minimas son:
+
+```csv
+experiment_id,load_id,run_id,date,stage,file_lvm,file_program,notes
+```
+
+`experiment_id` agrupa el experimento completo, `load_id` identifica la misma carga/celda sellada y `run_id` identifica una corrida individual. Asi, dos dias diferentes pueden pertenecer a la misma carga:
+
+```csv
+E08,L08,R01,2026-03-30,heating,26_03_30.lvm,26_03_30.pdf,heating da mesma carga
+E08,L08,R02,2026-03-31,cooling,26_03_31.lvm,26_03_31.pdf,cooling da mesma carga
+```
+
+Ejemplos utiles:
+
+```bash
+# Ver que comandos se ejecutarian para una carga
+.venv/bin/python process_experiments_from_metadata.py --load-id L08 --dry-run
+
+# Procesar solo cooling
+.venv/bin/python process_experiments_from_metadata.py --stage cooling
+
+# Para usar automaticamente --all-heating o --all-cooling segun stage
+.venv/bin/python process_experiments_from_metadata.py --load-id L08 --select-stage-zones
+
+# Pasar argumentos extra a process_dsc_data.py
+.venv/bin/python process_experiments_from_metadata.py --load-id L08 -- --onset-method simple
+```
+
 ## Uso de `compare_pt_path_nist.py`
 
 Ejecucion con argumentos:

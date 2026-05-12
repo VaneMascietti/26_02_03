@@ -1,0 +1,5 @@
+experiment_id,load_id,run_id,date,stage,file_lvm,file_program,notes
+E08,L08,R01,30/03/2026,heating,26_03_30.lvm,26_03_30.pdf,heating da mesma carga
+E08,L08,R02,31/03/2026,cooling,26_03_31.lvm,26_03_31.pdf,cooling da mesma carga
+E09,L09,R01,06/04/2026,heating,26_04_06.lvm,26_04_06.pdf,heating
+E09,L09,R02,07/04/2026,cooling,26_04_07.lvm,26_04_07.pdf,cooling
