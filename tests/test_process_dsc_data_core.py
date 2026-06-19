@@ -7,6 +7,7 @@ from process_dsc_data import (
     _dedupe_repeated_suffix,
     _extra_onsets_from_temperature_targets,
     _resolve_input_path,
+    _uses_trailing_sample_pressure,
     compute_onset_tangent,
     detect_zones_from_temperature,
     load_lvm,
@@ -148,6 +149,39 @@ def test_load_lvm_ignores_blank_leading_column_with_nul_footer(tmp_path):
     assert np.allclose(df["P_muestra"].to_numpy(), [307.3, 307.2])
     assert np.allclose(df["T_muestra"].to_numpy(), [19.914864, 19.914770])
     assert np.allclose(df["HF_mW"].to_numpy(), [178.607569, 177.973052])
+
+
+def test_load_lvm_detects_trailing_sample_pressure_layout(tmp_path):
+    lvm_path = tmp_path / "new_layout.lvm"
+    rows = []
+    for i, p_sample in enumerate([201.0, 220.0, 260.0, 310.0, 350.0]):
+        rows.append(
+            "\t".join(
+                [
+                    "",
+                    "0.0",
+                    "0.0",
+                    "422.5",
+                    str(10 + i),
+                    str(22.0 + i),
+                    str(22.5 + i),
+                    "57.4",
+                    "1.6",
+                    str(p_sample),
+                    f"5/8/2026 8:47:{16 + i:02d} PM",
+                ]
+            )
+        )
+    lvm_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    df = load_lvm(lvm_path)
+
+    raw = pd.read_csv(lvm_path, sep="\t", header=None)
+    raw = raw.iloc[:, 1:].copy()
+    raw.columns = range(raw.shape[1])
+    assert _uses_trailing_sample_pressure(raw)
+    assert np.allclose(df["P_muestra"].to_numpy(), [201.0, 220.0, 260.0, 310.0, 350.0])
+    assert np.allclose(df["P_referencia"].to_numpy(), [422.5] * 5)
 
 
 def test_extra_onsets_from_temperature_targets_maps_to_nearest_points():

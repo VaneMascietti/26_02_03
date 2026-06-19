@@ -3,3 +3,5 @@ E08,L08,R01,30/03/2026,heating,26_03_30.lvm,26_03_30.pdf,heating da mesma carga
 E08,L08,R02,31/03/2026,cooling,26_03_31.lvm,26_03_31.pdf,cooling da mesma carga
 E09,L09,R01,06/04/2026,heating,26_04_06.lvm,26_04_06.pdf,heating
 E09,L09,R02,07/04/2026,cooling,26_04_07.lvm,26_04_07.pdf,cooling
+E10,L10,R01,08/05/2026,heating,26_05_08.lvm,26_05_08.pdf,heating da mesma carga
+E10,L10,R02,11/05/2026,cooling,26_05_11.lvm,26_05_11.pdf,cooling da mesma carga

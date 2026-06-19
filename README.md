@@ -123,6 +123,28 @@ Ejemplos utiles:
 .venv/bin/python process_experiments_from_metadata.py --load-id L08 -- --onset-method simple
 ```
 
+## Stepwise cooling HF analysis
+
+Para enfriamientos escalonados tipo rampa-isoterma-rampa-isoterma en Calvet HP, usar:
+
+```bash
+python analyze_step_hf.py \
+  --data-heating data/raw/lvm/26_05_12.lvm \
+  --program-heating data/raw/pdf/26_05_12.pdf \
+  --data-cooling data/raw/lvm/26_05_13.lvm \
+  --program-cooling data/raw/pdf/26_05_13.pdf \
+  --exclude-transition-window 25 30 \
+  --outdir out/figures/step_hf \
+  --transparent \
+  --diagnostic-note "N2 cylinder closed during experiment"
+```
+
+Este flujo trata el HF como diagnostico termico/instrumental. No interpreta automaticamente onsets LL, no integra entalpia y no reporta `transition enthalpy`. Genera figuras en `out/figures/step_hf/` y tablas en `out/tables/step_hf/`, incluyendo:
+
+- `*_zone_summary.csv`
+- `*_isotherm_relaxation.csv`
+- `*_step_hf_processed.csv`
+
 ## Uso de `compare_pt_path_nist.py`
 
 Ejecucion con argumentos:

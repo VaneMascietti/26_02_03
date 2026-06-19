@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import pandas as pd
 import re
+import argparse
 from util.path import get_data_path, get_output_dir
 
 DEFAULT_DATA = "data/26_01_28_teste_oring_vitom.lvm"
@@ -89,6 +90,37 @@ def _drop_leading_counter_wrap(df: pd.DataFrame) -> pd.DataFrame:
     return df.iloc[first_wrap:].reset_index(drop=True)
 
 
+def _uses_trailing_sample_pressure(raw_df: pd.DataFrame) -> bool:
+    """
+    Detect 10-column exports where the trailing numeric pressure column is
+    P_muestra and column 2 is a nearly constant pressure setpoint/reference.
+    Older 10-column files keep P_muestra in column 2 and may have non-pressure
+    values in the trailing numeric column.
+    """
+    if raw_df.shape[1] < 10:
+        return False
+
+    col2 = pd.to_numeric(raw_df.iloc[:, 2], errors="coerce").dropna()
+    col8 = pd.to_numeric(raw_df.iloc[:, 8], errors="coerce").dropna()
+    if col2.empty or col8.empty:
+        return False
+
+    q2_25, q2_75 = col2.quantile([0.25, 0.75])
+    q8_05, q8_25, q8_75, q8_95 = col8.quantile([0.05, 0.25, 0.75, 0.95])
+    col2_iqr = float(q2_75 - q2_25)
+    col8_iqr = float(q8_75 - q8_25)
+
+    trailing_is_plausible_pressure = 1.0 <= float(q8_05) and float(q8_95) <= 1000.0
+    leading_is_nearly_constant = col2_iqr <= 1.0
+    trailing_has_signal = col8_iqr >= 2.0
+
+    return (
+        trailing_is_plausible_pressure
+        and leading_is_nearly_constant
+        and trailing_has_signal
+    )
+
+
 def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t", header=None, engine="python")
     # LVM can start with a leading tab, creating an empty first column
@@ -97,12 +129,14 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
         df.columns = range(df.shape[1])
 
     # Layout histórico: 9 columnas (última = datetime).
-    # Layout nuevo: 10 columnas (penúltima = P de referencia, última = datetime).
+    # Layout 10 columnas A: col 2 = P_muestra, penúltima = P_referencia.
+    # Layout 10 columnas B: col 2 = P_referencia/consigna, penúltima = P_muestra.
+    trailing_sample_pressure = _uses_trailing_sample_pressure(df)
     datetime_col = df.shape[1] - 1
     rename_map = {
         0: "P_bomba_bar",
         1: "V_bomba_ml",
-        2: "P_muestra_bar",
+        2: "P_referencia_bar" if trailing_sample_pressure else "P_muestra_bar",
         3: "_col4",
         4: "T_muestra",
         5: "T_horno",
@@ -111,7 +145,9 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
         datetime_col: "datetime",
     }
     if df.shape[1] >= 10:
-        rename_map[datetime_col - 1] = "P_referencia_bar"
+        rename_map[datetime_col - 1] = (
+            "P_muestra_bar" if trailing_sample_pressure else "P_referencia_bar"
+        )
     df = df.rename(columns=rename_map)
     df = _drop_leading_counter_wrap(df)
 
@@ -1600,9 +1636,129 @@ def print_peak_summary(clean: pd.DataFrame, peak_info: dict, zone_name: str | No
         )
 
 
-if __name__ == "__main__":
-    import argparse
+def _valid_sample_pressure_mask(clean: pd.DataFrame) -> pd.Series:
+    return (
+        np.isfinite(clean["T_muestra"])
+        & np.isfinite(clean["P_muestra"])
+        & np.isfinite(clean["t_h"])
+        & (clean["P_muestra"] > 0)
+    )
 
+
+def plot_pt_tracks(
+    tracks: list[tuple[pd.DataFrame, str]],
+    outpath: Path,
+    include_time: bool = False,
+    show_initial_pressure: bool = False,
+) -> None:
+    """
+    Plot sample pressure trajectories without NIST/reference overlays.
+
+    `tracks` contains (clean_dataframe, label) pairs already loaded with
+    `load_lvm`, so column-layout handling stays in the main data parser.
+    """
+    outpath.parent.mkdir(parents=True, exist_ok=True)
+
+    if include_time:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+        ax_pt, ax_time = axes
+    else:
+        fig, ax_pt = plt.subplots(figsize=(7, 5), constrained_layout=True)
+        ax_time = None
+
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["black"])
+
+    for i, (clean, label) in enumerate(tracks):
+        valid = _valid_sample_pressure_mask(clean)
+        data = clean.loc[valid]
+        if data.empty:
+            print(f"{label}: no hay puntos P-T validos")
+            continue
+        color = colors[i % len(colors)]
+        ax_pt.scatter(
+            data["T_muestra"],
+            data["P_muestra"],
+            s=0.55,
+            alpha=0.65,
+            color=color,
+            label=label,
+            rasterized=True,
+        )
+        if ax_time is not None:
+            ax_time.scatter(
+                data["t_h"],
+                data["P_muestra"],
+                s=0.55,
+                alpha=0.65,
+                color=color,
+                label=label,
+                rasterized=True,
+            )
+        if show_initial_pressure and not data.empty:
+            first = data.iloc[0]
+            label_text = f"P0={first['P_muestra']:.1f} bar"
+            ax_pt.scatter(
+                [first["T_muestra"]],
+                [first["P_muestra"]],
+                s=36,
+                color=color,
+                edgecolors="black",
+                linewidths=0.7,
+                zorder=5,
+            )
+            ax_pt.annotate(
+                label_text,
+                (first["T_muestra"], first["P_muestra"]),
+                xytext=(6, 6),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+            )
+            if ax_time is not None:
+                ax_time.scatter(
+                    [first["t_h"]],
+                    [first["P_muestra"]],
+                    s=36,
+                    color=color,
+                    edgecolors="black",
+                    linewidths=0.7,
+                    zorder=5,
+                )
+                ax_time.annotate(
+                    label_text,
+                    (first["t_h"], first["P_muestra"]),
+                    xytext=(6, 6),
+                    textcoords="offset points",
+                    fontsize=8,
+                    color=color,
+                )
+        print(
+            f"{label}: points={len(data)}, "
+            f"t=[{data['t_h'].min():.3f},{data['t_h'].max():.3f}] h, "
+            f"T=[{data['T_muestra'].min():.3f},{data['T_muestra'].max():.3f}] °C, "
+            f"P=[{data['P_muestra'].min():.3f},{data['P_muestra'].max():.3f}] bar"
+        )
+
+    ax_pt.set_title("P vs T")
+    ax_pt.set_xlabel("T muestra (°C)")
+    ax_pt.set_ylabel("P muestra (bar)")
+    ax_pt.grid(True, alpha=0.3)
+    ax_pt.legend(markerscale=8, fontsize=8)
+
+    if ax_time is not None:
+        ax_time.set_title("P vs tiempo")
+        ax_time.set_xlabel("Tiempo desde inicio (h)")
+        ax_time.set_ylabel("P muestra (bar)")
+        ax_time.grid(True, alpha=0.3)
+        ax_time.legend(markerscale=8, fontsize=8)
+
+    fig.savefig(outpath, dpi=220)
+    plt.close(fig)
+    print(f"Guardado: {outpath}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser."""
     parser = argparse.ArgumentParser(
         description="Graficar panel 6 a partir de un .lvm.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -1628,6 +1784,31 @@ if __name__ == "__main__":
         "--no-rebase",
         action="store_true",
         help="Mantener tiempo absoluto al filtrar por zona",
+    )
+    parser.add_argument(
+        "--full-data",
+        action="store_true",
+        help="Graficar el .lvm completo sin recortar por la duracion del PDF del programa.",
+    )
+    parser.add_argument(
+        "--plot-pt",
+        action="store_true",
+        help="Guardar solo P_muestra vs T_muestra en out/figures/pt_compare y salir.",
+    )
+    parser.add_argument(
+        "--plot-pt-time",
+        action="store_true",
+        help="Guardar P_muestra vs T_muestra y P_muestra vs tiempo en una figura y salir.",
+    )
+    parser.add_argument("--data2", type=str, default=None, help="Segundo .lvm para superponer en --plot-pt.")
+    parser.add_argument("--program2", type=str, default=None, help="PDF del programa para --data2.")
+    parser.add_argument("--label", type=str, default=None, help="Etiqueta para --plot-pt.")
+    parser.add_argument("--label2", type=str, default=None, help="Etiqueta para --data2 en --plot-pt.")
+    parser.add_argument("--out", type=str, default=None, help="Ruta de salida para --plot-pt/--plot-pt-time.")
+    parser.add_argument(
+        "--show-initial-pressure",
+        action="store_true",
+        help="Marcar y etiquetar P0 en los graficos --plot-pt/--plot-pt-time.",
     )
     parser.add_argument(
         "--onset-around",
@@ -1674,14 +1855,17 @@ if __name__ == "__main__":
             "Puede repetirse: --extra-onset-temp 40.64 --extra-onset-temp 16.09"
         ),
     )
-    args = parser.parse_args()
+    return parser
 
-    raw_data_path = Path(args.data)
-    raw_program_path = Path(args.program)
-    resolved_data_input = _resolve_input_path(raw_data_path, expected_suffix=".lvm")
-    resolved_program_input = _resolve_input_path(raw_program_path, expected_suffix=".pdf")
-    data_path = get_data_path(resolved_data_input, "lvm")
-    program_path = get_data_path(resolved_program_input, "pdf")
+
+def resolve_data_program(data_arg: str, program_arg: str) -> tuple[Path, Path]:
+    """Resolve data/PDF inputs using the project path conventions."""
+    raw_data_path = Path(data_arg)
+    raw_program_path = Path(program_arg)
+    data_input = _resolve_input_path(raw_data_path, expected_suffix=".lvm")
+    program_input = _resolve_input_path(raw_program_path, expected_suffix=".pdf")
+    data_path = get_data_path(data_input, "lvm")
+    program_path = get_data_path(program_input, "pdf")
 
     if not data_path.exists():
         raise SystemExit(f"Archivo .lvm no encontrado: {raw_data_path}")
@@ -1691,25 +1875,18 @@ if __name__ == "__main__":
     if program_path != raw_program_path and program_path.exists():
         print(f"Usando PDF del programa: {program_path}")
 
-    clean = load_lvm(data_path, program_pdf=program_path)
-    show_reference_pressure = bool(args.show_reference_pressure)
-    zone_info = None
+    return data_path, program_path
 
-    def zone_num_from_profile(zones_all, ztype, ordinal):
-        if zones_all is None or ordinal is None:
-            return None
-        matches = [z for z in zones_all if z["type"].lower().startswith(ztype.lower())]
-        if ordinal <= 0 or ordinal > len(matches):
-            return None
-        return matches[ordinal - 1]["num"]
 
-    def zone_nums_by_type(zones_all, ztype):
-        if zones_all is None:
-            return []
-        return [z["num"] for z in zones_all if z["type"].lower().startswith(ztype.lower())]
+def default_pt_outpath(stems: list[str], include_time: bool, full_data: bool) -> Path:
+    prefix = "pt_and_p_time" if include_time else "pt"
+    suffix = "_".join(stems)
+    tail = "all_points" if full_data else "program"
+    return get_output_dir("figures", "pt_compare") / f"{prefix}_{suffix}_{tail}.png"
 
-    zones_all = None
-    zone_requested = (
+
+def zone_requested(args: argparse.Namespace) -> bool:
+    return (
         args.zone is not None
         or args.Cooling is not None
         or args.Heating is not None
@@ -1718,7 +1895,72 @@ if __name__ == "__main__":
         or args.all_cooling
         or args.all_heating
     )
-    if zone_requested:
+
+
+def zone_num_from_profile(zones_all, ztype, ordinal):
+    if zones_all is None or ordinal is None:
+        return None
+    matches = [z for z in zones_all if z["type"].lower().startswith(ztype.lower())]
+    if ordinal <= 0 or ordinal > len(matches):
+        return None
+    return matches[ordinal - 1]["num"]
+
+
+def zone_nums_by_type(zones_all, ztype):
+    if zones_all is None:
+        return []
+    return [z["num"] for z in zones_all if z["type"].lower().startswith(ztype.lower())]
+
+
+def handle_pt_plot(args: argparse.Namespace, data_path: Path, program_path: Path) -> None:
+    """Handle --plot-pt and --plot-pt-time, then exit the CLI path."""
+    load_program_path = None if args.full_data else program_path
+    tracks = [(load_lvm(data_path, program_pdf=load_program_path), args.label or data_path.stem)]
+    stems = [data_path.stem]
+
+    if args.data2:
+        data2_path, program2_path = resolve_data_program(
+            args.data2,
+            args.program2 if args.program2 else args.program,
+        )
+        load_program2_path = None if args.full_data else program2_path
+        tracks.append((load_lvm(data2_path, program_pdf=load_program2_path), args.label2 or data2_path.stem))
+        stems.append(data2_path.stem)
+
+    outpath = Path(args.out) if args.out else default_pt_outpath(
+        stems,
+        include_time=args.plot_pt_time,
+        full_data=args.full_data,
+    )
+    plot_pt_tracks(
+        tracks,
+        outpath,
+        include_time=args.plot_pt_time,
+        show_initial_pressure=args.show_initial_pressure,
+    )
+
+
+if __name__ == "__main__":
+    parser = build_parser()
+    args = parser.parse_args()
+
+    data_path, program_path = resolve_data_program(args.data, args.program)
+
+    if args.plot_pt or args.plot_pt_time:
+        handle_pt_plot(args, data_path, program_path)
+        raise SystemExit(0)
+
+    zones_were_requested = zone_requested(args)
+    if args.full_data and zones_were_requested:
+        raise SystemExit("--full-data no se puede combinar con seleccion de zonas.")
+
+    load_program_path = None if args.full_data else program_path
+    clean = load_lvm(data_path, program_pdf=load_program_path)
+    show_reference_pressure = bool(args.show_reference_pressure)
+    zone_info = None
+
+    zones_all = None
+    if zones_were_requested:
         # Cuando el usuario pide una zona por número/perfil, debe respetar
         # la numeración del PDF del programa y no caer al fallback automático.
         t_h = clean["t_h"].to_numpy() if "t_h" in clean else None
@@ -1800,12 +2042,17 @@ if __name__ == "__main__":
                 print_peak_summary(zone_clean, peak_info, zone_name=zone_name)
     else:
         show_onset = args.onset_around is not None
-        outname = f"{base_name}_panel_6plots.png"
+        outname = (
+            f"{base_name}_panel_6plots_full.png"
+            if args.full_data
+            else f"{base_name}_panel_6plots.png"
+        )
         peak_info = plot_panel_6(
             clean,
             get_output_dir("figures", "process_dsc_data"),
             outname=outname,
-            program_pdf=program_path,
+            show_zones=not args.full_data,
+            program_pdf=None if args.full_data else program_path,
             onset_method=args.onset_method,
             onset_center_h=args.onset_around,
             onset_window_h=args.onset_window,
