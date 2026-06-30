@@ -1,0 +1,44 @@
+ID,Fecha,Carga,xCO2,Aislante,Protocolo,n_ciclos_total,Ciclo,transition_type,T_C,P_bar,source,marker_note,Nota
+E01,24-feb,L01,0.9035,No,isocoro inicial,1,C1,TLL,24.496,277.6,tabla,,composicao retrospectiva por Veff; interpretar com cautela
+E01,24-feb,L01,0.9035,No,isocoro inicial,1,C1,TSL,10.914,272.3,tabla,,composicao retrospectiva por Veff; interpretar com cautela
+E02,02-mar,L02,0.8918,No,procedimiento original,2,C1,TLL,25.499,266.1,tabla,,segunda corrida de L02
+E02,02-mar,L02,0.8918,No,procedimiento original,2,C1,TSL,9.071,262.3,tabla,,segunda corrida de L02
+E02,02-mar,L02,0.8918,No,procedimiento original,2,C2,TLL,25.611,253.7,tabla,,segundo ciclo de E03; completar si lo vas a analizar
+E02,02-mar,L02,0.8918,No,procedimiento original,2,C2,TSL,9.795,246.4,tabla,,segundo ciclo de E03; completar si lo vas a analizar
+E03,06-mar,L03,0.8955,No,transicion metodologica; sin estabilizacion previa,1,C1,TLL,24.752,205.7,tabla,,"feicao ampla; forte efeito de gradiente termico, originalmente 2 ciclos, pero fue interrumpido"
+E03,06-mar,L03,0.8955,No,transicion metodologica; sin estabilizacion previa,1,C1,TSL,10.679,,tabla sin P,,"feicao ampla; forte efeito de gradiente termico, originalmente 2 ciclos, pero fue interrumpido"
+E04,09-mar,L03,0.8955,No,transicion metodologica; estabilizacion previa,1,C1,TLL,25.979,369.3,tabla,,no llego a baja T; secundarias 33.483 C / 402.6 bar e 44.454 C / 435.4 bar
+E04,09-mar,L03,0.8955,No,transicion metodologica; estabilizacion previa,1,C1,secondary,33.483,402.6,tabla,secundaria,no llego a baja T; secundarias 33.483 C / 402.6 bar e 44.454 C / 435.4 bar
+E04,09-mar,L03,0.8955,No,transicion metodologica; estabilizacion previa,1,C1,secondary,44.454,435.4,tabla,secundaria,no llego a baja T; secundarias 33.483 C / 402.6 bar e 44.454 C / 435.4 bar
+E05,10/03 + 11/03,L03,0.8955,No,bano 20 C inicial + cooling,1,C1,TLL,26.87,,tabla sin P,,P no disponible; secundaria 42.628 C. Observacion de 2 picos endotermicos inciales por ligacion del bano
+E05,10/03 + 11/03,L03,0.8955,No,bano 20 C inicial + cooling,1,C1,TSL,8.395,,tabla sin P,,P no disponible; secundaria 42.628 C. Observacion de 2 picos endotermicos inciales por ligacion del bano
+E05,10/03 + 11/03,L03,0.8955,No,bano 20 C inicial + cooling,1,C1,secondary,42.628,,tabla sin P,secundaria sin P,P no disponible; secundaria 42.628 C. Observacion de 2 picos endotermicos inciales por ligacion del bano
+E06,12/03 + 13/03,L04,0.9011,No,bano 20 C inicial + cooling,2,C1,TLL,27.912,424.5,tabla,,
+E06,12/03 + 13/03,L04,0.9011,No,bano 20 C inicial + cooling,2,C1,TSL,7.981,407.9,tabla,,
+E06,12/03 + 13/03,L04,0.9011,No,bano 20 C inicial + cooling,2,C2,TLL,27.595,424.2,tabla,,
+E06,12/03 + 13/03,L04,0.9011,No,bano 20 C inicial + cooling,2,C2,TSL,7.964,407.9,tabla,,
+E07,16/03 + 17/03,L05,0.9052,No,bano 20 C inicial + cooling,2,C1,TLL,25.654,445.2,tabla,,
+E07,16/03 + 17/03,L05,0.9052,No,bano 20 C inicial + cooling,2,C1,TSL,8.915,422.8,tabla,,
+E07,16/03 + 17/03,L05,0.9052,No,bano 20 C inicial + cooling,2,C2,TLL,25.814,345.4,tabla,,
+E07,16/03 + 17/03,L05,0.9052,No,bano 20 C inicial + cooling,2,C2,TSL,8.901,325.9,tabla,,
+E08,26/03 + 27/03,L05 corregida,0.9037,PE/XPE,bano 20 C + cooling,2,C1,TLL,29.588,257.7,tabla,,Mejor punto cuantitativo. HF com buen comportamiento. Bano -10 C
+E08,26/03 + 27/03,L05 corregida,0.9037,PE/XPE,bano 20 C + cooling,2,C1,TSL,7.556,236.6,tabla,,Mejor punto cuantitativo. HF com buen comportamiento. Bano -10 C
+E08,26/03 + 27/03,L05 corregida,0.9037,PE/XPE,bano 20 C + cooling,2,C2,TLL,29.451,204.1,tabla,,
+E08,26/03 + 27/03,L05 corregida,0.9037,PE/XPE,bano 20 C + cooling,2,C2,TSL,7.53,177.1,tabla,,
+E09,31/03 + 06/04,L05 corregida,0.9037,PE/XPE,beta_h=beta_c=0.05,1,C1,TLL,36.944,165.3,tabla,,LL menos robusto
+E09,31/03 + 06/04,L05 corregida,0.9037,PE/XPE,beta_h=beta_c=0.05,1,C1,TSL,7.37,96.2,tabla,,LL menos robusto
+E10,15/04 + 16/04,L06,~0.937*,aerogel,nuevo termopar + vazamento,1,C1,TLL,27.556,290.8,tabla,,composicion aparente; PICO SL chico
+E10,15/04 + 16/04,L06,~0.937*,aerogel,nuevo termopar + vazamento,1,C1,TSL,8.42,279.9,tabla,,composicion aparente; PICO SL chico
+E11,17/04 + 20/04,L07,0.916,aerogel,48 h a 60 C / termopar,1,C1,TLL,32.425,326.8,tabla,,nueva carga
+E11,17/04 + 20/04,L07,0.916,aerogel,48 h a 60 C / termopar,1,C1,TSL,7.621,318.2,tabla,,nueva carga
+E12,29/04 + 30/04,L07,0.916,No,sin aislante + con termopar,1,C1,TLL,33.071,260.2,tabla,,contraste sin aislante
+E12,29/04 + 30/04,L07,0.916,No,sin aislante + con termopar,1,C1,TSL,7.383,241,tabla,,contraste sin aislante
+E13,08/05 + 11/05,L08,0.8941,No,Sin termopar / microesferas,1,C1,TSL,7.286,,tabla sin P,,Muchisimo ruido
+E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,TLL,36.458,307.6,tabla,,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
+E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,TSL,7.338,293.7,tabla,,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
+E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,secondary,47.44,316.2,tabla,secundaria,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
+E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,secondary,14.046,295,tabla,secundaria,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
+E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,TLL,33.623,256.4,tabla,,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)
+E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,TSL,7.522,245.3,tabla,,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)
+E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,secondary,38.623,265.3,tabla,secundaria,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)
+E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,secondary,11.308,246.9,tabla,secundaria,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)

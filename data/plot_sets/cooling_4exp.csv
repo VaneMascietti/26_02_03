@@ -1,0 +1,5 @@
+ID,file,label,program_pdf,heating_file,heating_program_pdf
+E06,data/raw/lvm/26_03_13.lvm,E06,data/raw/pdf/26_03_13.pdf,data/raw/lvm/26_03_12.lvm,data/raw/pdf/26_03_12.pdf
+E07,data/raw/lvm/26_03_17.lvm,E07,data/raw/pdf/26_03_17.pdf,data/raw/lvm/26_03_16.lvm,data/raw/pdf/26_03_16.pdf
+E18,data/raw/lvm/26_06_15.lvm,E18,data/raw/pdf/26_06_15.pdf,data/raw/lvm/26_06_14.lvm,data/raw/pdf/26_06_14.pdf
+E19,data/raw/lvm/26_06_23_running.lvm,E19,data/raw/pdf/26_06_23.pdf,data/raw/lvm/26_06_22.lvm,data/raw/pdf/26_06_22.pdf
