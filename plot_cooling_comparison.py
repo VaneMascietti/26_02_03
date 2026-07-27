@@ -64,6 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--p-max", type=float, default=None)
     parser.add_argument("--t-min", type=float, default=None)
     parser.add_argument("--t-max", type=float, default=None)
+    parser.add_argument("--pt-reference-csv", type=Path, default=None,
+                        help="Optional CSV with literature P-T points to overlay on the P-T plot")
+    parser.add_argument("--pt-reference-label", default="literature",
+                        help="Legend label for --pt-reference-csv")
     parser.add_argument("--allow-missing", action="store_true", default=True,
                         help="Skip missing files instead of failing")
     return parser
@@ -208,6 +212,8 @@ def plot_xy(
     title: str,
     outpath: Path,
     invert_x: bool = False,
+    reference: pd.DataFrame | None = None,
+    reference_label: str = "literature",
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, 5.2), constrained_layout=True)
     for data in datasets:
@@ -220,6 +226,17 @@ def plot_xy(
             label=data["label"].iloc[0],
             rasterized=True,
         )
+    if reference is not None and not reference.empty:
+        ax.scatter(
+            reference[x_col],
+            reference[y_col],
+            marker="x",
+            s=34,
+            linewidths=1.0,
+            color="0.25",
+            alpha=0.8,
+            label=reference_label,
+        )
     ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -231,8 +248,57 @@ def plot_xy(
     plt.close(fig)
 
 
+def plot_segments_vs_time(
+    datasets: list[pd.DataFrame],
+    y_col: str,
+    ylabel: str,
+    title: str,
+    outpath: Path,
+) -> None:
+    fig, ax = plt.subplots(figsize=(8, 5.2), constrained_layout=True)
+    for data in datasets:
+        segment = str(data["segment"].iloc[0]) if "segment" in data.columns else ""
+        linestyle = "-" if segment == "heating" else "--"
+        marker = "." if segment == "heating" else ","
+        ax.plot(
+            data["path_time_h"],
+            data[y_col],
+            marker=marker,
+            linestyle=linestyle,
+            ms=1.4,
+            alpha=0.75,
+            label=data["label"].iloc[0],
+            rasterized=True,
+        )
+    ax.set_title(title)
+    ax.set_xlabel("Relative path time (h)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    fig.savefig(outpath, dpi=220)
+    plt.close(fig)
+
+
 def select_time_span(df: pd.DataFrame, start_h: float, end_h: float) -> pd.DataFrame:
     return df[(df["t_h"] >= start_h) & (df["t_h"] <= end_h)].copy()
+
+
+def load_pt_reference(path: Path, project: Path) -> pd.DataFrame:
+    ref_path = path if path.is_absolute() else project / path
+    if not ref_path.is_file():
+        raise FileNotFoundError(f"P-T reference CSV not found: {ref_path}")
+    df = pd.read_csv(ref_path)
+    if "T_C" not in df.columns and "T_K" in df.columns:
+        df["T_C"] = pd.to_numeric(df["T_K"], errors="coerce") - 273.15
+    if "P_bar" not in df.columns and "p_MPa" in df.columns:
+        df["P_bar"] = pd.to_numeric(df["p_MPa"], errors="coerce") * 10.0
+    missing = {"T_C", "P_bar"} - set(df.columns)
+    if missing:
+        raise ValueError(f"Reference CSV missing columns: {sorted(missing)}")
+    out = df.rename(columns={"T_C": "T_muestra", "P_bar": "P_muestra"}).copy()
+    out["T_muestra"] = pd.to_numeric(out["T_muestra"], errors="coerce")
+    out["P_muestra"] = pd.to_numeric(out["P_muestra"], errors="coerce")
+    return out.dropna(subset=["T_muestra", "P_muestra"])
 
 
 def main() -> int:
@@ -249,7 +315,19 @@ def main() -> int:
     config = load_set(set_path)
     datasets: list[pd.DataFrame] = []
     pt_datasets: list[pd.DataFrame] = []
+    time_segment_datasets: list[pd.DataFrame] = []
     summaries = []
+    pt_reference = None
+    if args.pt_reference_csv is not None:
+        pt_reference = load_pt_reference(args.pt_reference_csv, project)
+        if args.t_min is not None:
+            pt_reference = pt_reference[pt_reference["T_muestra"] >= args.t_min]
+        if args.t_max is not None:
+            pt_reference = pt_reference[pt_reference["T_muestra"] <= args.t_max]
+        if args.p_min is not None:
+            pt_reference = pt_reference[pt_reference["P_muestra"] >= args.p_min]
+        if args.p_max is not None:
+            pt_reference = pt_reference[pt_reference["P_muestra"] <= args.p_max]
 
     for _, row in config.iterrows():
         lvm_path = resolve_path(project, row["file"])
@@ -334,9 +412,26 @@ def main() -> int:
                 heating["label"] = f"{label} heating"
                 heating["file"] = str(heating_lvm_path)
                 heating["program_pdf"] = str(heating_program_pdf)
+                heating_duration_h = heating_span[1] - heating_span[0]
+                cooling_start_h = data["program_start_h"].iloc[0] if "program_start_h" in data.columns else data["t_h"].min()
+                heating_for_time = heating.copy()
+                heating_for_time["segment"] = "heating"
+                heating_for_time["path_time_h"] = heating_for_time["t_h"] - heating_span[0]
+                heating_for_time["label"] = f"{label} heating"
+                cooling_for_time = data.copy()
+                cooling_for_time["segment"] = "cooling"
+                cooling_for_time["path_time_h"] = heating_duration_h + (cooling_for_time["t_h"] - cooling_start_h)
+                cooling_for_time["label"] = f"{label} cooling"
+                time_segment_datasets.extend([heating_for_time, cooling_for_time])
                 pt_data = pd.concat([pt_data, heating], ignore_index=True, sort=False)
             else:
                 print(f"[WARN] {label}: no initial heating path found in {heating_program_pdf}")
+        if not time_segment_datasets or not any(segment["ID"].iloc[0] == exp_id for segment in time_segment_datasets):
+            fallback = data.copy()
+            fallback["segment"] = "cooling"
+            fallback["path_time_h"] = fallback["t_h"] - fallback["t_h"].min()
+            fallback["label"] = f"{label} cooling"
+            time_segment_datasets.append(fallback)
         pt_datasets.append(pt_data)
 
         summaries.append({
@@ -405,6 +500,22 @@ def main() -> int:
         title="Pressure vs temperature: first cooling and initial heating",
         outpath=figdir / f"{args.out_prefix}_pressure_vs_temperature.png",
         invert_x=False,
+        reference=pt_reference,
+        reference_label=args.pt_reference_label,
+    )
+    plot_segments_vs_time(
+        time_segment_datasets,
+        y_col=args.pressure_col,
+        ylabel="Sample pressure (bar)",
+        title="Pressure vs time: initial heating followed by first cooling",
+        outpath=figdir / f"{args.out_prefix}_pressure_vs_time_heating_cooling.png",
+    )
+    plot_segments_vs_time(
+        time_segment_datasets,
+        y_col=args.temp_col,
+        ylabel="Sample temperature (C)",
+        title="Temperature vs time: initial heating followed by first cooling",
+        outpath=figdir / f"{args.out_prefix}_temperature_vs_time_heating_cooling.png",
     )
 
     print(f"Saved table: {combined_path}")
