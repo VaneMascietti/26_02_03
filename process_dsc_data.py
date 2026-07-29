@@ -2,9 +2,27 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import pandas as pd
-import re
 import argparse
+from util.lvm_io import (
+    _drop_leading_counter_wrap,
+    _series_is_effectively_blank,
+    _uses_trailing_sample_pressure,
+    load_lvm,
+)
 from util.path import get_data_path, get_output_dir
+from util.program_zones import (
+    get_zone_spans as _get_zone_spans,
+    isotherm_spans_from_program,
+    load_program_zones,
+    program_total_seconds,
+    program_zone_spans,
+    select_zone as _select_zone,
+    zone_label,
+    zone_number_by_type,
+    zone_numbers_by_type,
+    zone_type_to_english,
+)
+from util.pt_plot import plot_pt_tracks as _plot_pt_tracks
 
 DEFAULT_DATA = "data/26_01_28_teste_oring_vitom.lvm"
 DEFAULT_PROGRAM = "data/26_01_28_teste_oring_vitom.pdf"
@@ -51,127 +69,6 @@ def _resolve_input_path(path: Path, expected_suffix: str | None = None) -> Path:
 
     return path
 
-
-def _series_is_effectively_blank(series: pd.Series) -> bool:
-    normalized = (
-        series.fillna("")
-        .astype(str)
-        .str.replace("\x00", "", regex=False)
-        .str.strip()
-    )
-    return normalized.eq("").all()
-
-
-def _drop_leading_counter_wrap(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Some exports prepend one or a few stale rows from the previous segment.
-    Detect an abrupt wrap in the internal counter right at the file start and
-    trim only that leading prefix.
-    """
-    if "_col4" not in df.columns or len(df) < 2:
-        return df
-
-    counter = pd.to_numeric(df["_col4"], errors="coerce").to_numpy(dtype=float)
-    if not np.isfinite(counter[0]):
-        return df
-
-    wrap_points = np.where(np.diff(counter) < -100.0)[0] + 1
-    if wrap_points.size == 0:
-        return df
-
-    first_wrap = int(wrap_points[0])
-    if first_wrap > 5:
-        return df
-    if not np.isfinite(counter[first_wrap]):
-        return df
-    if counter[0] < 100.0 or counter[first_wrap] > 10.0:
-        return df
-
-    return df.iloc[first_wrap:].reset_index(drop=True)
-
-
-def _uses_trailing_sample_pressure(raw_df: pd.DataFrame) -> bool:
-    """
-    Detect 10-column exports where the trailing numeric pressure column is
-    P_muestra and column 2 is a nearly constant pressure setpoint/reference.
-    Older 10-column files keep P_muestra in column 2 and may have non-pressure
-    values in the trailing numeric column.
-    """
-    if raw_df.shape[1] < 10:
-        return False
-
-    col2 = pd.to_numeric(raw_df.iloc[:, 2], errors="coerce").dropna()
-    col8 = pd.to_numeric(raw_df.iloc[:, 8], errors="coerce").dropna()
-    if col2.empty or col8.empty:
-        return False
-
-    q2_25, q2_75 = col2.quantile([0.25, 0.75])
-    q8_05, q8_25, q8_75, q8_95 = col8.quantile([0.05, 0.25, 0.75, 0.95])
-    col2_iqr = float(q2_75 - q2_25)
-    col8_iqr = float(q8_75 - q8_25)
-
-    trailing_is_plausible_pressure = 1.0 <= float(q8_05) and float(q8_95) <= 1000.0
-    leading_is_nearly_constant = col2_iqr <= 1.0
-    trailing_has_signal = col8_iqr >= 2.0
-
-    return (
-        trailing_is_plausible_pressure
-        and leading_is_nearly_constant
-        and trailing_has_signal
-    )
-
-
-def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t", header=None, engine="python")
-    # LVM can start with a leading tab, creating an empty first column
-    while df.shape[1] >= 1 and _series_is_effectively_blank(df.iloc[:, 0]):
-        df = df.iloc[:, 1:].copy()
-        df.columns = range(df.shape[1])
-
-    # Layout histórico: 9 columnas (última = datetime).
-    # Layout 10 columnas A: col 2 = P_muestra, penúltima = P_referencia.
-    # Layout 10 columnas B: col 2 = P_referencia/consigna, penúltima = P_muestra.
-    trailing_sample_pressure = _uses_trailing_sample_pressure(df)
-    datetime_col = df.shape[1] - 1
-    rename_map = {
-        0: "P_bomba_bar",
-        1: "V_bomba_ml",
-        2: "P_referencia_bar" if trailing_sample_pressure else "P_muestra_bar",
-        3: "_col4",
-        4: "T_muestra",
-        5: "T_horno",
-        6: "HF_uV",
-        7: "HF_mW",
-        datetime_col: "datetime",
-    }
-    if df.shape[1] >= 10:
-        rename_map[datetime_col - 1] = (
-            "P_muestra_bar" if trailing_sample_pressure else "P_referencia_bar"
-        )
-    df = df.rename(columns=rename_map)
-    df = _drop_leading_counter_wrap(df)
-
-    df["datetime"] = pd.to_datetime(
-        df["datetime"], format="%m/%d/%Y %I:%M:%S %p", errors="coerce"
-    )
-    df = df.loc[df["datetime"].notna()].copy()
-    if df.empty:
-        raise ValueError(f"No valid datetime rows found in {path}")
-    df = df.reset_index(drop=True)
-    t0 = df["datetime"].iloc[0]
-    df["t_s"] = (df["datetime"] - t0).dt.total_seconds()
-    sample_time_s = np.arange(len(df), dtype=float) * 0.5
-    df["t_h"] = sample_time_s / 3600.0
-
-    df["P_muestra"] = df["P_muestra_bar"]
-    if "P_referencia_bar" in df.columns:
-        df["P_referencia"] = df["P_referencia_bar"]
-
-    total_s = program_total_seconds(program_pdf) if program_pdf is not None else None
-    if total_s is not None:
-        df = df.loc[sample_time_s <= total_s].copy()
-
-    return df
 
 def detect_ramp_turns(t_h, y, min_sep_h=5.0):
     y = np.asarray(y, dtype=float)
@@ -883,210 +780,28 @@ def detect_peak_start(
         "threshold": float(threshold),
     }
 
-def load_program_zones(pdf_path: Path):
-    try:
-        import PyPDF2
-    except Exception:
-        return []
-
-    if not pdf_path.exists():
-        return []
-
-    reader = PyPDF2.PdfReader(str(pdf_path))
-    text = "\n".join((page.extract_text() or "") for page in reader.pages)
-    lines = text.splitlines()
-
-    zone_headers = []
-    for i, line in enumerate(lines):
-        m = re.match(r"\s*(\d+)\s*:\s*(.+)\s*$", line)
-        if m:
-            zone_headers.append((i, int(m.group(1)), m.group(2).strip()))
-
-    # Some PDF exports split headers at page boundaries and PyPDF2 can
-    # extract lines like "Page 37 : Cooling" instead of "7 : Cooling".
-    # Infer the missing zone number from neighboring headers.
-    page_header_candidates = []
-    for i, line in enumerate(lines):
-        m = re.match(r"\s*Page\s+\d+\s*:\s*(.+)\s*$", line, flags=re.IGNORECASE)
-        if not m:
-            continue
-        typ = m.group(1).strip()
-        typ_l = typ.lower()
-        if typ_l.startswith(("cooling", "heating", "isoterma", "isothermal", "return")):
-            page_header_candidates.append((i, typ))
-
-    if page_header_candidates and zone_headers:
-        existing_nums = {num for _, num, _ in zone_headers}
-        explicit_by_index = sorted(zone_headers, key=lambda x: x[0])
-        inferred_headers = []
-
-        for i, typ in page_header_candidates:
-            prev = None
-            nxt = None
-            for h in explicit_by_index:
-                if h[0] < i:
-                    prev = h
-                elif h[0] > i:
-                    nxt = h
-                    break
-
-            inferred_num = None
-            if prev and nxt and (nxt[1] - prev[1] == 2):
-                inferred_num = prev[1] + 1
-            elif prev and (prev[1] + 1) not in existing_nums:
-                inferred_num = prev[1] + 1
-            elif nxt and (nxt[1] - 1) > 0 and (nxt[1] - 1) not in existing_nums:
-                inferred_num = nxt[1] - 1
-
-            if inferred_num and inferred_num not in existing_nums:
-                inferred_headers.append((i, inferred_num, typ))
-                existing_nums.add(inferred_num)
-
-        if inferred_headers:
-            zone_headers.extend(inferred_headers)
-            zone_headers.sort(key=lambda x: x[0])
-
-    zones = []
-    for idx, (i, num, typ) in enumerate(zone_headers):
-        j = zone_headers[idx + 1][0] if idx + 1 < len(zone_headers) else len(lines)
-        duration = None
-        for line in lines[i:j]:
-            m = re.search(r"Total duration:\s*([0-9]+(?:\.[0-9]+)?)\s*s", line)
-            if m:
-                d_val = float(m.group(1))
-                duration = int(d_val) if d_val.is_integer() else d_val
-                break
-        if duration is None:
-            continue
-        zones.append({"num": num, "type": typ, "duration_s": duration})
-
-    return zones
-
-def program_total_seconds(pdf_path: Path):
-    zones = load_program_zones(pdf_path)
-    if not zones:
-        return None
-    return sum(z["duration_s"] for z in zones)
-
-def program_zone_spans(pdf_path: Path, t_h=None):
-    zones = load_program_zones(pdf_path)
-    if not zones:
-        return []
-
-    spans = []
-    t_s = 0.0
-    for z in zones:
-        duration = z["duration_s"]
-        start_h = t_s / 3600.0
-        end_h = (t_s + duration) / 3600.0
-        spans.append(
-            {"num": z["num"], "type": z["type"], "start_h": start_h, "end_h": end_h}
-        )
-        t_s += duration
-
-    if t_h is not None and len(t_h) > 0:
-        t_min, t_max = float(t_h[0]), float(t_h[-1])
-        clipped = []
-        for z in spans:
-            t0, t1 = z["start_h"], z["end_h"]
-            if t1 <= t_min or t0 >= t_max:
-                continue
-            clipped.append(
-                {
-                    "num": z["num"],
-                    "type": z["type"],
-                    "start_h": max(t0, t_min),
-                    "end_h": min(t1, t_max),
-                }
-            )
-        spans = clipped
-
-    return spans
-
 def get_zone_spans(clean, pdf_path: Path):
-    t_h = clean["t_h"].to_numpy() if "t_h" in clean else clean["t_s"].to_numpy() / 3600.0
-    zones = program_zone_spans(pdf_path, t_h=t_h)
-    if zones:
-        return zones
-    return detect_zones_from_temperature(t_h, clean["T_horno"].to_numpy())
+    """Keep the historical temperature-derived fallback for malformed PDFs."""
+    return _get_zone_spans(
+        clean,
+        pdf_path,
+        fallback=detect_zones_from_temperature,
+    )
 
-def zone_label(zones, zone_num):
-    zone = next((z for z in zones if z["num"] == zone_num), None)
-    if zone is None:
-        return f"Zona {zone_num}"
-    ztype = zone["type"]
-    count = sum(1 for z in zones if z["type"] == ztype and z["num"] <= zone_num)
-    return f"{ztype} {count}"
+
+def select_zone(clean, zone_num, pdf_path: Path, rebase_time=True):
+    """Select a PDF zone while retaining the historical fallback behavior."""
+    return _select_zone(
+        clean,
+        zone_num,
+        pdf_path,
+        rebase_time=rebase_time,
+        fallback=detect_zones_from_temperature,
+    )
 
 
 def _zone_type_to_english(ztype: str) -> str:
-    """Translate program zone type names to English for plot titles."""
-    z = (ztype or "").strip().lower()
-    mapping = {
-        "isoterma": "Isotherm",
-        "isothermal": "Isotherm",
-        "heating": "Heating",
-        "cooling": "Cooling",
-        "return": "Return",
-    }
-    return mapping.get(z, ztype)
-
-
-def isotherm_spans_from_program(pdf_path: Path, t_h=None):
-    zones = load_program_zones(pdf_path)
-    if not zones:
-        return []
-
-    spans = []
-    t_s = 0.0
-    for z in zones:
-        duration = z["duration_s"]
-        if "isoterma" in z["type"].lower():
-            spans.append((t_s / 3600.0, (t_s + duration) / 3600.0))
-        t_s += duration
-
-    if t_h is not None and len(t_h) > 0:
-        t_min, t_max = float(t_h[0]), float(t_h[-1])
-        clipped = []
-        for t0, t1 in spans:
-            if t1 <= t_min or t0 >= t_max:
-                continue
-            clipped.append((max(t0, t_min), min(t1, t_max)))
-        spans = clipped
-
-    return spans
-
-def select_zone(clean, zone_num, pdf_path: Path, rebase_time=True):
-    zones = get_zone_spans(clean, pdf_path)
-    if not zones:
-        return None, None
-    zone = next((z for z in zones if z["num"] == zone_num), None)
-    if zone is None:
-        return None, None
-
-    orig_start = zone["start_h"]
-    orig_end = zone["end_h"]
-    mask = (clean["t_h"] >= zone["start_h"]) & (clean["t_h"] <= zone["end_h"])
-    subset = clean.loc[mask].copy()
-    if rebase_time and len(subset) > 0:
-        subset["t_h"] = subset["t_h"] - zone["start_h"]
-        if "t_s" in subset:
-            subset["t_s"] = subset["t_s"] - zone["start_h"] * 3600.0
-        zone = {
-            "num": zone["num"],
-            "type": zone["type"],
-            "start_h": 0.0,
-            "end_h": orig_end - orig_start,
-            "offset_h": orig_start,
-            "orig_start_h": orig_start,
-            "orig_end_h": orig_end,
-        }
-    else:
-        zone["offset_h"] = 0.0
-        zone["orig_start_h"] = orig_start
-        zone["orig_end_h"] = orig_end
-
-    return subset, zone
+    return zone_type_to_english(ztype)
 
 def plot_panel_6(
     clean,
@@ -1637,12 +1352,12 @@ def print_peak_summary(clean: pd.DataFrame, peak_info: dict, zone_name: str | No
 
 
 def _valid_sample_pressure_mask(clean: pd.DataFrame) -> pd.Series:
-    return (
-        np.isfinite(clean["T_muestra"])
-        & np.isfinite(clean["P_muestra"])
-        & np.isfinite(clean["t_h"])
-        & (clean["P_muestra"] > 0)
-    )
+    from util.data_filters import numeric_filter_mask
+
+    return numeric_filter_mask(
+        clean,
+        ["T_muestra", "P_muestra", "t_h"],
+    ) & (pd.to_numeric(clean["P_muestra"], errors="coerce") > 0)
 
 
 def plot_pt_tracks(
@@ -1651,110 +1366,13 @@ def plot_pt_tracks(
     include_time: bool = False,
     show_initial_pressure: bool = False,
 ) -> None:
-    """
-    Plot sample pressure trajectories without NIST/reference overlays.
-
-    `tracks` contains (clean_dataframe, label) pairs already loaded with
-    `load_lvm`, so column-layout handling stays in the main data parser.
-    """
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-
-    if include_time:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
-        ax_pt, ax_time = axes
-    else:
-        fig, ax_pt = plt.subplots(figsize=(7, 5), constrained_layout=True)
-        ax_time = None
-
-    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["black"])
-
-    for i, (clean, label) in enumerate(tracks):
-        valid = _valid_sample_pressure_mask(clean)
-        data = clean.loc[valid]
-        if data.empty:
-            print(f"{label}: no hay puntos P-T validos")
-            continue
-        color = colors[i % len(colors)]
-        ax_pt.scatter(
-            data["T_muestra"],
-            data["P_muestra"],
-            s=0.55,
-            alpha=0.65,
-            color=color,
-            label=label,
-            rasterized=True,
-        )
-        if ax_time is not None:
-            ax_time.scatter(
-                data["t_h"],
-                data["P_muestra"],
-                s=0.55,
-                alpha=0.65,
-                color=color,
-                label=label,
-                rasterized=True,
-            )
-        if show_initial_pressure and not data.empty:
-            first = data.iloc[0]
-            label_text = f"P0={first['P_muestra']:.1f} bar"
-            ax_pt.scatter(
-                [first["T_muestra"]],
-                [first["P_muestra"]],
-                s=36,
-                color=color,
-                edgecolors="black",
-                linewidths=0.7,
-                zorder=5,
-            )
-            ax_pt.annotate(
-                label_text,
-                (first["T_muestra"], first["P_muestra"]),
-                xytext=(6, 6),
-                textcoords="offset points",
-                fontsize=8,
-                color=color,
-            )
-            if ax_time is not None:
-                ax_time.scatter(
-                    [first["t_h"]],
-                    [first["P_muestra"]],
-                    s=36,
-                    color=color,
-                    edgecolors="black",
-                    linewidths=0.7,
-                    zorder=5,
-                )
-                ax_time.annotate(
-                    label_text,
-                    (first["t_h"], first["P_muestra"]),
-                    xytext=(6, 6),
-                    textcoords="offset points",
-                    fontsize=8,
-                    color=color,
-                )
-        print(
-            f"{label}: points={len(data)}, "
-            f"t=[{data['t_h'].min():.3f},{data['t_h'].max():.3f}] h, "
-            f"T=[{data['T_muestra'].min():.3f},{data['T_muestra'].max():.3f}] °C, "
-            f"P=[{data['P_muestra'].min():.3f},{data['P_muestra'].max():.3f}] bar"
-        )
-
-    ax_pt.set_title("P vs T")
-    ax_pt.set_xlabel("T muestra (°C)")
-    ax_pt.set_ylabel("P muestra (bar)")
-    ax_pt.grid(True, alpha=0.3)
-    ax_pt.legend(markerscale=8, fontsize=8)
-
-    if ax_time is not None:
-        ax_time.set_title("P vs tiempo")
-        ax_time.set_xlabel("Tiempo desde inicio (h)")
-        ax_time.set_ylabel("P muestra (bar)")
-        ax_time.grid(True, alpha=0.3)
-        ax_time.legend(markerscale=8, fontsize=8)
-
-    fig.savefig(outpath, dpi=220)
-    plt.close(fig)
-    print(f"Guardado: {outpath}")
+    """Backward-compatible wrapper around the shared P-T renderer."""
+    _plot_pt_tracks(
+        tracks,
+        outpath,
+        include_time=include_time,
+        show_initial_pressure=show_initial_pressure,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1898,18 +1516,11 @@ def zone_requested(args: argparse.Namespace) -> bool:
 
 
 def zone_num_from_profile(zones_all, ztype, ordinal):
-    if zones_all is None or ordinal is None:
-        return None
-    matches = [z for z in zones_all if z["type"].lower().startswith(ztype.lower())]
-    if ordinal <= 0 or ordinal > len(matches):
-        return None
-    return matches[ordinal - 1]["num"]
+    return zone_number_by_type(zones_all, ztype, ordinal)
 
 
 def zone_nums_by_type(zones_all, ztype):
-    if zones_all is None:
-        return []
-    return [z["num"] for z in zones_all if z["type"].lower().startswith(ztype.lower())]
+    return zone_numbers_by_type(zones_all or [], ztype)
 
 
 def handle_pt_plot(args: argparse.Namespace, data_path: Path, program_path: Path) -> None:

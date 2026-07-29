@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from process_dsc_data import load_lvm, program_zone_spans
+from util.lvm_io import load_lvm
+from util.program_zones import program_zone_spans
 from util.path import get_data_path
 
 

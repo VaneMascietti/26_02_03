@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Compare cooling portions of several LVM experiments.
 
-The input CSV defines the experiments. The script generates three plots for the
+The input CSV defines the experiments. The script generates plots for the
 same selected cooling data:
 
     HF vs temperature
     HF vs pressure
     pressure vs temperature
+    pressure and sample temperature vs relative path time
 """
 
 from __future__ import annotations
@@ -28,7 +29,9 @@ DEFAULT_PROJECT = Path("/home/andrea/26_02_03")
 PROJECT = DEFAULT_PROJECT
 sys.path.insert(0, str(PROJECT))
 
-from process_dsc_data import load_lvm, program_zone_spans  # noqa: E402
+from util.data_filters import filter_numeric_rows, select_time_span  # noqa: E402
+from util.lvm_io import load_lvm  # noqa: E402
+from util.program_zones import first_zone_span_h, program_zone_spans  # noqa: E402
 
 
 DEFAULT_SET = Path("data/plot_sets/cooling_4exp.csv")
@@ -60,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Save one every N selected points in the processed CSV")
     parser.add_argument("--all-points", action="store_true",
                         help="Alias for --selection all")
+    parser.add_argument(
+        "--time-only",
+        action="store_true",
+        help="Save only the pressure/temperature versus time figure",
+    )
     parser.add_argument("--p-min", type=float, default=None)
     parser.add_argument("--p-max", type=float, default=None)
     parser.add_argument("--t-min", type=float, default=None)
@@ -68,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Optional CSV with literature P-T points to overlay on the P-T plot")
     parser.add_argument("--pt-reference-label", default="literature",
                         help="Legend label for --pt-reference-csv")
+    parser.add_argument(
+        "--separate-pt-time",
+        action="store_true",
+        help="Save the legacy separate pressure-time and temperature-time figures instead of one combined figure",
+    )
+    parser.add_argument("--combined-pt-time", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--allow-missing", action="store_true", default=True,
                         help="Skip missing files instead of failing")
     return parser
@@ -106,20 +120,11 @@ def load_set(path: Path) -> pd.DataFrame:
 
 
 def first_cooling_span_h(program_pdf: Path) -> tuple[float, float] | None:
-    spans = program_zone_spans(program_pdf)
-    for span in spans:
-        if "cool" in str(span["type"]).lower():
-            return float(span["start_h"]), float(span["end_h"])
-    return None
+    return first_zone_span_h(program_pdf, ("cooling",))
 
 
 def first_heating_span_h(program_pdf: Path) -> tuple[float, float] | None:
-    spans = program_zone_spans(program_pdf)
-    for span in spans:
-        ztype = str(span["type"]).lower()
-        if "heat" in ztype or "inicio" in ztype:
-            return float(span["start_h"]), float(span["end_h"])
-    return None
+    return first_zone_span_h(program_pdf, ("heating", "aquecimento", "inicio"))
 
 
 def initial_heating_path_span_h(program_pdf: Path) -> tuple[float, float] | None:
@@ -132,7 +137,7 @@ def initial_heating_path_span_h(program_pdf: Path) -> tuple[float, float] | None
     spans = program_zone_spans(program_pdf)
     for idx, span in enumerate(spans):
         ztype = str(span["type"]).lower()
-        if "heat" not in ztype and "inicio" not in ztype:
+        if "heat" not in ztype and "aquecimento" not in ztype and "inicio" not in ztype:
             continue
         start_h = spans[idx - 1]["start_h"] if idx > 0 else span["start_h"]
         end_h = spans[idx + 1]["end_h"] if idx + 1 < len(spans) else span["end_h"]
@@ -168,21 +173,15 @@ def select_data(
     if missing:
         raise ValueError(f"Missing columns in LVM data: {missing}")
 
-    out = df.copy()
-    for col in [temp_col, pressure_col, hf_col, "t_h"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-
-    valid = out[[temp_col, pressure_col, hf_col, "t_h"]].notna().all(axis=1)
-    if t_min is not None:
-        valid &= out[temp_col] >= t_min
-    if t_max is not None:
-        valid &= out[temp_col] <= t_max
-    if p_min is not None:
-        valid &= out[pressure_col] >= p_min
-    if p_max is not None:
-        valid &= out[pressure_col] <= p_max
-
-    out = out.loc[valid].copy()
+    out = filter_numeric_rows(
+        df,
+        [temp_col, pressure_col, hf_col, "t_h"],
+        bounds={
+            temp_col: (t_min, t_max),
+            pressure_col: (p_min, p_max),
+        },
+        require_finite=False,
+    )
     if out.empty or selection == "all":
         return out
 
@@ -279,8 +278,60 @@ def plot_segments_vs_time(
     plt.close(fig)
 
 
-def select_time_span(df: pd.DataFrame, start_h: float, end_h: float) -> pd.DataFrame:
-    return df[(df["t_h"] >= start_h) & (df["t_h"] <= end_h)].copy()
+def plot_pressure_temperature_vs_time(
+    datasets: list[pd.DataFrame],
+    pressure_col: str,
+    temp_col: str,
+    outpath: Path,
+    title: str,
+) -> None:
+    """Plot pressure and sample temperature against one shared relative-time axis."""
+    fig, pressure_axis = plt.subplots(figsize=(8, 5.2), constrained_layout=True)
+    temperature_axis = pressure_axis.twinx()
+    colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["black"])
+
+    for index, data in enumerate(datasets):
+        segment = str(data["segment"].iloc[0]) if "segment" in data.columns else ""
+        if segment == "heating":
+            pressure_style, temperature_style, marker = "-", ":", "."
+        elif segment == "cooling":
+            pressure_style, temperature_style, marker = "--", "-.", ","
+        else:
+            pressure_style, temperature_style, marker = "-", ":", None
+        color = colors[index % len(colors)]
+        label = data["label"].iloc[0]
+        pressure_axis.plot(
+            data["path_time_h"],
+            data[pressure_col],
+            color=color,
+            marker=marker,
+            linestyle=pressure_style,
+            ms=1.4,
+            alpha=0.8,
+            label=f"{label}: pressure",
+            rasterized=True,
+        )
+        temperature_axis.plot(
+            data["path_time_h"],
+            data[temp_col],
+            color=color,
+            linestyle=temperature_style,
+            lw=1.0,
+            alpha=0.6,
+            label=f"{label}: temperature",
+            rasterized=True,
+        )
+
+    fig.suptitle(title, fontsize=12)
+    pressure_axis.set_xlabel("Relative path time (h)")
+    pressure_axis.set_ylabel("Sample pressure (bar)")
+    temperature_axis.set_ylabel("Sample temperature (C)")
+    pressure_axis.grid(True, alpha=0.3)
+    handles, labels = pressure_axis.get_legend_handles_labels()
+    temp_handles, temp_labels = temperature_axis.get_legend_handles_labels()
+    pressure_axis.legend(handles + temp_handles, labels + temp_labels, fontsize=7, ncol=2, loc="best")
+    fig.savefig(outpath, dpi=220)
+    plt.close(fig)
 
 
 def load_pt_reference(path: Path, project: Path) -> pd.DataFrame:
@@ -345,8 +396,13 @@ def main() -> int:
                 continue
             raise FileNotFoundError(message)
 
-        raw = load_lvm(lvm_path, program_pdf=None)
         selection = "all" if args.all_points else args.selection
+        # A full-program comparison must stop at the PDF program duration.
+        # Instrument files can continue recording during the return/idle period.
+        raw = load_lvm(
+            lvm_path,
+            program_pdf=program_pdf if selection == "all" else None,
+        )
         data = select_data(
             raw,
             temp_col=args.temp_col,
@@ -428,9 +484,9 @@ def main() -> int:
                 print(f"[WARN] {label}: no initial heating path found in {heating_program_pdf}")
         if not time_segment_datasets or not any(segment["ID"].iloc[0] == exp_id for segment in time_segment_datasets):
             fallback = data.copy()
-            fallback["segment"] = "cooling"
+            fallback["segment"] = "program" if selection == "all" else "cooling"
             fallback["path_time_h"] = fallback["t_h"] - fallback["t_h"].min()
-            fallback["label"] = f"{label} cooling"
+            fallback["label"] = f"{label} complete program" if selection == "all" else f"{label} cooling"
             time_segment_datasets.append(fallback)
         pt_datasets.append(pt_data)
 
@@ -472,51 +528,66 @@ def main() -> int:
     combined_for_table.to_csv(combined_path, index=False)
     pd.DataFrame(summaries).to_csv(summary_path, index=False)
 
-    plot_xy(
-        datasets,
-        x_col=args.temp_col,
-        y_col=args.hf_col,
-        xlabel="Sample temperature (C)",
-        ylabel=f"{args.hf_col} (mW)",
-        title="Heat flow vs temperature during first cooling, β = 0.05 K/min",
-        outpath=figdir / f"{args.out_prefix}_hf_vs_temperature.png",
-        invert_x=True,
-    )
-    plot_xy(
-        datasets,
-        x_col=args.pressure_col,
-        y_col=args.hf_col,
-        xlabel="Sample pressure (bar)",
-        ylabel=f"{args.hf_col} (mW)",
-        title="Heat flow vs pressure during first cooling, β = 0.05 K/min",
-        outpath=figdir / f"{args.out_prefix}_hf_vs_pressure.png",
-    )
-    plot_xy(
-        pt_datasets,
-        x_col=args.temp_col,
-        y_col=args.pressure_col,
-        xlabel="Sample temperature (C)",
-        ylabel="Sample pressure (bar)",
-        title="Pressure vs temperature: first cooling and initial heating",
-        outpath=figdir / f"{args.out_prefix}_pressure_vs_temperature.png",
-        invert_x=False,
-        reference=pt_reference,
-        reference_label=args.pt_reference_label,
-    )
-    plot_segments_vs_time(
-        time_segment_datasets,
-        y_col=args.pressure_col,
-        ylabel="Sample pressure (bar)",
-        title="Pressure vs time: initial heating followed by first cooling",
-        outpath=figdir / f"{args.out_prefix}_pressure_vs_time_heating_cooling.png",
-    )
-    plot_segments_vs_time(
-        time_segment_datasets,
-        y_col=args.temp_col,
-        ylabel="Sample temperature (C)",
-        title="Temperature vs time: initial heating followed by first cooling",
-        outpath=figdir / f"{args.out_prefix}_temperature_vs_time_heating_cooling.png",
-    )
+    full_program = args.all_points or args.selection == "all"
+    if not args.time_only:
+        path_context = "complete selected program" if full_program else "first cooling"
+        plot_xy(
+            datasets,
+            x_col=args.temp_col,
+            y_col=args.hf_col,
+            xlabel="Sample temperature (C)",
+            ylabel=f"{args.hf_col} (mW)",
+            title=f"Heat flow vs temperature during {path_context}, β = 0.05 K/min",
+            outpath=figdir / f"{args.out_prefix}_hf_vs_temperature.png",
+            invert_x=True,
+        )
+        plot_xy(
+            datasets,
+            x_col=args.pressure_col,
+            y_col=args.hf_col,
+            xlabel="Sample pressure (bar)",
+            ylabel=f"{args.hf_col} (mW)",
+            title=f"Heat flow vs pressure during {path_context}, β = 0.05 K/min",
+            outpath=figdir / f"{args.out_prefix}_hf_vs_pressure.png",
+        )
+        plot_xy(
+            pt_datasets,
+            x_col=args.temp_col,
+            y_col=args.pressure_col,
+            xlabel="Sample temperature (C)",
+            ylabel="Sample pressure (bar)",
+            title=("Pressure vs temperature: complete selected program" if full_program
+                   else "Pressure vs temperature: first cooling and initial heating"),
+            outpath=figdir / f"{args.out_prefix}_pressure_vs_temperature.png",
+            invert_x=False,
+            reference=pt_reference,
+            reference_label=args.pt_reference_label,
+        )
+    time_suffix = "full_program" if full_program else "heating_cooling"
+    if args.separate_pt_time:
+        plot_segments_vs_time(
+            time_segment_datasets,
+            y_col=args.pressure_col,
+            ylabel="Sample pressure (bar)",
+            title="Pressure vs time: initial heating followed by first cooling",
+            outpath=figdir / f"{args.out_prefix}_pressure_vs_time_heating_cooling.png",
+        )
+        plot_segments_vs_time(
+            time_segment_datasets,
+            y_col=args.temp_col,
+            ylabel="Sample temperature (C)",
+            title="Temperature vs time: initial heating followed by first cooling",
+            outpath=figdir / f"{args.out_prefix}_temperature_vs_time_heating_cooling.png",
+        )
+    else:
+        plot_pressure_temperature_vs_time(
+            time_segment_datasets,
+            pressure_col=args.pressure_col,
+            temp_col=args.temp_col,
+            outpath=figdir / f"{args.out_prefix}_pressure_temperature_vs_time_{time_suffix}.png",
+            title=("Pressure and sample temperature vs time: complete selected program" if full_program
+                   else "Pressure and sample temperature vs time: initial heating followed by first cooling"),
+        )
 
     print(f"Saved table: {combined_path}")
     print(f"Saved summary: {summary_path}")

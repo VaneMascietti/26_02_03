@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from process_dsc_data import load_lvm, DEFAULT_PROGRAM
+from process_dsc_data import DEFAULT_PROGRAM
+from util.lvm_io import load_lvm
 from util.path import ensure_out_layout, get_data_path, get_output_dir
 
 # NIST Phase Change Data (CO2) from NIST Chemistry WebBook, SRD 69
