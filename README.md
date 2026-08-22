@@ -37,6 +37,7 @@ pip install -r requirements.txt
 
 - `process_dsc_data.py`: carga `.lvm`, parsea zonas del PDF del programa, genera panel 6 y calcula onset/onset2.
 - `compare_pt_path_nist.py`: superpone trayectoria experimental con curvas NIST (isocoras y saturacion).
+- `plot_time_profile.py`: grafica `P_muestra` y `T_muestra`/`T_horno` vs tiempo desde un unico `.lvm`.
 - `data/`: experimentos `.lvm` y programas `.pdf`.
 - `nist/`: tablas NIST locales.
 - `out/figures/`: figuras generadas.
@@ -145,6 +146,35 @@ Este flujo trata el HF como diagnostico termico/instrumental. No interpreta auto
 - `*_isotherm_relaxation.csv`
 - `*_step_hf_processed.csv`
 
+## Uso de `plot_time_profile.py`
+
+Para el flujo nuevo con un solo `.lvm` y perfil de temperatura variable:
+
+```bash
+python plot_time_profile.py --data 26_08_13.lvm
+```
+
+Salida esperada:
+- Imagen: `out/figures/time_profile/<archivo>_pressure_temperature_vs_time.png`
+- Eje izquierdo: `P_muestra` vs tiempo
+- Eje derecho: `T_muestra` vs tiempo
+
+Opciones utiles:
+
+```bash
+# eje de tiempo en minutos
+python plot_time_profile.py --data 26_08_13.lvm --time-unit min
+
+# recortar una ventana temporal en horas
+python plot_time_profile.py --data 26_08_13.lvm --time-min 10 --time-max 25
+
+# mostrar solo temperatura de muestra
+python plot_time_profile.py --data 26_08_13.lvm --temperature sample
+
+# incluir tambien temperatura de banho/horno
+python plot_time_profile.py --data 26_08_13.lvm --temperature both
+```
+
 ## Uso de `compare_pt_path_nist.py`
 
 Ejecucion con argumentos:
@@ -189,6 +219,40 @@ Correr tests:
 ```bash
 pytest -q
 ```
+
+## Prototipo local DSC/uDSC Calisto
+
+Se agrego un flujo local para PDF/TXT de Calisto orientado a transiciones LL/SL:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest
+streamlit run app.py
+```
+
+Uso CLI con los archivos de ejemplo:
+
+```bash
+.venv/bin/python cli.py \
+  --pdf data/23_05_12.pdf \
+  --txt data/23_05_12.txt \
+  --outdir outputs/dsc_analysis_23_05_12
+```
+
+El parser conserva los archivos originales, detecta TXT UTF-16 con delimitador final, prefiere `Sample Temperature` cuando existe y advierte cuando usa `Furnace Temperature`. El PDF se interpreta por zonas de programa termico; el numero de ciclos se infiere de los enfriamientos de la secuencia, no del nombre del archivo.
+
+Salidas principales:
+- `results_by_cycle.csv`
+- `thermal_program.csv`
+- `zone_assignments.csv`
+- `analysis_config.json`
+- `warnings.txt`
+- `report.html`
+- figuras por ciclo en `figures/`
+
+La deteccion automatica es deliberadamente conservadora. Para el ejemplo `23_05_12`, el primer enfriamiento detecta un TSL fuerte cerca de 15.34 deg C y deja TLL como no detectado automaticamente; la referencia manual indicada para validacion es TLL = 15.842 deg C y TSL = 15.186 deg C, por lo que la diferencia automatica de TSL es aproximadamente +0.156 deg C. Estos valores no estan codificados en el algoritmo.
 
 Chequeo de sintaxis:
 
