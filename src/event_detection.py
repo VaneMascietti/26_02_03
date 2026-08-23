@@ -18,6 +18,13 @@ DEFAULT_CONFIG = {
     "min_persistence_points": 8,
     "min_delta_bic": 10.0,
     "event_window_points": 80,
+    # A low-temperature cooling scan can contain the LL and SL onsets in one
+    # broad transition.  Keep this branch opt-in by temperature range so the
+    # regular multi-event behavior used by the 50 -> 10 C scans is unchanged.
+    "low_temperature_pair_max_c": 35.0,
+    "low_temperature_ll_low_delta_c": 0.10,
+    "low_temperature_ll_high_delta_c": 1.10,
+    "low_temperature_sl_tangent_half_window": 36,
 }
 
 
@@ -79,6 +86,49 @@ def _classify(metrics: NoiseMetrics, config: dict[str, float]) -> tuple[str, str
     return "not detected", "low"
 
 
+def _broad_tangent_onset(
+    temperature: np.ndarray,
+    heat_flow: np.ndarray,
+    baseline_mask: np.ndarray,
+    event_index: int,
+    config: dict[str, float],
+) -> tuple[float, tuple[float, float], tuple[float, float], float] | None:
+    """Estimate an LL onset from the broad shoulder around a sharp SL event."""
+
+    event_temperature = float(temperature[event_index])
+    low = event_temperature - float(config["low_temperature_ll_low_delta_c"])
+    high = event_temperature + float(config["low_temperature_ll_high_delta_c"])
+    tangent_mask = (
+        np.isfinite(temperature)
+        & np.isfinite(heat_flow)
+        & (temperature >= low)
+        & (temperature <= high)
+    )
+    if tangent_mask.sum() < 8 or baseline_mask.sum() < 8:
+        return None
+
+    baseline_coeffs = robust_polyfit(temperature[baseline_mask], heat_flow[baseline_mask], degree=1)
+    tangent_coeffs = robust_polyfit(temperature[tangent_mask], heat_flow[tangent_mask], degree=1)
+    denominator = float(baseline_coeffs[0] - tangent_coeffs[0])
+    if abs(denominator) < 1e-12:
+        return None
+    onset = float((tangent_coeffs[1] - baseline_coeffs[1]) / denominator)
+    data_low = float(np.nanmin(temperature))
+    data_high = float(np.nanmax(temperature))
+    if not (data_low - 2 <= onset <= data_high + 2):
+        return None
+
+    baseline_window = (
+        float(np.nanmin(temperature[baseline_mask])),
+        float(np.nanmax(temperature[baseline_mask])),
+    )
+    tangent_window = (
+        float(np.nanmin(temperature[tangent_mask])),
+        float(np.nanmax(temperature[tangent_mask])),
+    )
+    return onset, baseline_window, tangent_window, float(tangent_coeffs[0])
+
+
 def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dict | None = None) -> tuple[list[EventResult], NoiseMetrics | None, np.ndarray | None]:
     """Detect up to two candidate events in one segment.
 
@@ -133,7 +183,19 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
             )
         ], metrics, residuals
 
-    selected = sorted(scored[:2], key=lambda item: item[1])
+    low_temperature_pair = (
+        direction == "cooling"
+        and float(np.nanmax(temperature)) <= float(cfg["low_temperature_pair_max_c"])
+    )
+    if low_temperature_pair:
+        # Select the candidate with the strongest segmented-vs-baseline
+        # evidence.  Other gradients in the post-transition baseline (for
+        # example near 13 C in 23_05_09) are not separate transitions.
+        positive_bic = [item for item in scored if item[2].delta_bic > 0]
+        primary = max(positive_bic or scored, key=lambda item: (item[2].delta_bic, item[0]))
+        selected = [primary]
+    else:
+        selected = sorted(scored[:2], key=lambda item: item[1])
     selected_indices = [item[1] for item in selected]
     labels = ["event"] * len(selected_indices)
     if direction == "cooling" and selected_indices:
@@ -153,7 +215,18 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
         local_residuals = heat_flow - evaluate(local_coeffs, temperature)
         local_metrics = analyse_noise(local_residuals, local_baseline, local_mask)
         local_status, local_confidence = _classify(local_metrics, cfg)
-        onset, base_window, tangent_window = tangent_onset(temperature, heat_flow, local_baseline, idx)
+        tangent_half_window = (
+            int(cfg["low_temperature_sl_tangent_half_window"])
+            if low_temperature_pair
+            else 12
+        )
+        onset, base_window, tangent_window = tangent_onset(
+            temperature,
+            heat_flow,
+            local_baseline,
+            idx,
+            tangent_half_window=tangent_half_window,
+        )
         slope = None
         if tangent_window:
             win = (temperature >= min(tangent_window)) & (temperature <= max(tangent_window))
@@ -179,7 +252,48 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
             )
         )
 
-    if len(results) == 2 and abs(results[0].peak_temp_c - results[1].peak_temp_c) < 0.25:
+    if low_temperature_pair and results:
+        broad = _broad_tangent_onset(
+            temperature,
+            heat_flow,
+            selected[0][3],
+            selected[0][1],
+            cfg,
+        )
+        if broad is not None:
+            onset, baseline_window, tangent_window, tangent_slope = broad
+            unc, ci_low, ci_high = onset_uncertainty(
+                temperature,
+                onset,
+                selected[0][2].mad_sigma,
+                tangent_slope,
+            )
+            tll = EventResult(
+                event_label="TLL",
+                status="doubtful",
+                confidence="medium",
+                onset_temp_c=onset,
+                onset_uncertainty_c=unc,
+                ci95_low_c=ci_low,
+                ci95_high_c=ci_high,
+                peak_temp_c=float(temperature[selected[0][1]]),
+                snr=selected[0][2].snr,
+                integrated_snr=selected[0][2].integrated_snr,
+                automatic_label="TLL",
+                baseline_window_c=baseline_window,
+                tangent_window_c=tangent_window,
+                notes=(
+                    "LL estimated from the broad tangent around the low-temperature "
+                    "SL transition; manual confirmation is required."
+                ),
+            )
+            results.insert(0, tll)
+
+    if (
+        not low_temperature_pair
+        and len(results) == 2
+        and abs(results[0].peak_temp_c - results[1].peak_temp_c) < 0.25
+    ):
         for result in results:
             result.status = "doubtful"
             result.notes = "Overlapping events are not resolved."

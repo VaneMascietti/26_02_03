@@ -85,9 +85,11 @@ def _ll_region(temperature: np.ndarray, result: EventResult) -> tuple[float, flo
     data_high = float(np.nanmax(temperature))
     onset = _finite_onset(result)
     if onset is not None:
-        # Keep the LL detail readable: five degrees below the onset and eight
-        # degrees above it match the reference layout while remaining bounded
-        # by the available trace.
+        # The reference layout uses a broad LL window for the full 10-50 C
+        # scans.  A 30-10 C scan is much shorter, so use a compact window or
+        # the zoom would cover almost the entire top panel.
+        if data_high - data_low <= 25.0:
+            return max(data_low, onset - 1.0), min(data_high, onset + 1.0)
         return max(data_low, onset - 5.0), min(data_high, onset + 8.0)
     span = max(points) - min(points)
     padding = max(1.0, 0.20 * span)
@@ -247,7 +249,7 @@ def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Pat
     full_ax.set_xlabel("Temperature (°C)")
     full_ax.set_ylabel("Heat flow (mW)")
     full_ax.text(0.015, 0.93, "(a)", transform=full_ax.transAxes, fontsize=16, fontweight="bold")
-    full_ax.text(0.03, 0.83, "Exo ↑", transform=full_ax.transAxes, fontsize=14)
+    full_ax.text(0.03, 0.05, "Exo ↑", transform=full_ax.transAxes, fontsize=14)
     _add_cooling_arrow(full_ax)
     _draw_tsl_panel(full_ax, temp, heat_flow, _event(results, "TSL"))
 
@@ -290,7 +292,7 @@ def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Pat
         zoom_ax.set_xlabel("Temperature (°C)")
         zoom_ax.set_ylabel("Heat flow (mW)")
         zoom_ax.text(0.015, 0.92, "(b)", transform=zoom_ax.transAxes, fontsize=16, fontweight="bold")
-        zoom_ax.text(0.06, 0.83, "Exo ↑", transform=zoom_ax.transAxes, fontsize=14)
+        zoom_ax.text(0.03, 0.05, "Exo ↑", transform=zoom_ax.transAxes, fontsize=14)
         _add_cooling_arrow(zoom_ax)
 
     for ax in axes:
