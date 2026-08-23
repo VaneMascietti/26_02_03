@@ -53,7 +53,7 @@ def main() -> None:
             st.warning(warning)
 
         if st.button("Run analysis"):
-            outdir = Path("outputs/streamlit_run")
+            outdir = Path("out/streamlit_run")
             output = analyze(
                 pdf_path,
                 txt_path,
@@ -73,4 +73,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

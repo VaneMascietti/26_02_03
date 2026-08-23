@@ -18,7 +18,6 @@ Thumbs.db
 .vscode/
 
 # Project outputs
-output/
 out/
 
 # Raw inputs (local, not versioned)
@@ -27,6 +26,9 @@ data/raw/
 # Instrument files
 *.lvm
 *.tdms
+
+# Git metadata kept outside the read-only .git mount in this environment
+.gitmeta/
 # Optional: uncomment if instrument PDFs should not be versioned
 # *.pdf
 

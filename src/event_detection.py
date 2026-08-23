@@ -140,13 +140,11 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
         if len(selected_indices) == 1:
             labels = ["TSL"]
         else:
-            temps = [float(temperature[idx]) for idx in selected_indices]
-            if abs(temps[0] - temps[1]) <= 5.0:
-                labels = ["TLL", "TSL", *["event"] * max(0, len(selected_indices) - 2)]
-            else:
-                lower_temp_pos = int(np.argmin(temps))
-                labels = ["candidate"] * len(selected_indices)
-                labels[lower_temp_pos] = "TSL"
+            # During cooling, the higher-temperature candidate is LL and the
+            # lower-temperature candidate is SL, even when the transitions are
+            # far apart.  The confidence/status fields still communicate when
+            # the higher-temperature feature is only a doubtful candidate.
+            labels = ["TLL", "TSL", *["event"] * max(0, len(selected_indices) - 2)]
 
     results: list[EventResult] = []
     for i, idx in enumerate(selected_indices):

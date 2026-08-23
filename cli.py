@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Analyze Calisto DSC/uDSC PDF and TXT files.")
     parser.add_argument("--pdf", required=True, help="Calisto experiment PDF")
     parser.add_argument("--txt", required=True, nargs="+", help="TXT file(s) or folders")
-    parser.add_argument("--outdir", default="outputs/dsc_analysis", help="Output directory")
+    parser.add_argument("--outdir", default="out/dsc_analysis", help="Output directory")
     parser.add_argument("--max-cycles", type=int, default=None, help="Limit cycles for quick validation")
     parser.add_argument("--snr-detected", type=float, default=DEFAULT_CONFIG["snr_detected"])
     parser.add_argument("--snr-doubtful", type=float, default=DEFAULT_CONFIG["snr_doubtful"])
@@ -109,4 +109,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

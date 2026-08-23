@@ -32,8 +32,8 @@ TRANSITION_MARKERS = {
     "TIAC": "s",
     "secondary": "^",
     "LLV": "v",
-    "SLL": "P",
-    "SL": "X",
+    "SLL": "s",
+    "SL": "s",
     "literature": "D",
 }
 
@@ -65,6 +65,31 @@ ID_LABEL_OFFSETS_BY_ID = {
 }
 
 
+def order_points_by_proximity(df: pd.DataFrame) -> pd.DataFrame:
+    if len(df) < 3:
+        return df
+
+    x_values = df["T_C"].to_numpy(dtype=float)
+    y_values = df["P_bar"].to_numpy(dtype=float)
+    x_scale = max(float(np.ptp(x_values)), 1.0)
+    y_scale = max(float(np.ptp(y_values)), 1.0)
+    normalized = np.column_stack((x_values / x_scale, y_values / y_scale))
+
+    remaining = set(range(len(df)))
+    current = int(np.argmin(y_values))
+    order = [current]
+    remaining.remove(current)
+    while remaining:
+        next_index = min(
+            remaining,
+            key=lambda index: float(np.sum((normalized[index] - normalized[current]) ** 2)),
+        )
+        order.append(next_index)
+        remaining.remove(next_index)
+        current = next_index
+    return df.iloc[order]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Plot phase-transition points, separated from full P-T paths.",
@@ -75,6 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Optional literature CSV to append")
     parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
     parser.add_argument("--out", default="phase_transition_points.png")
+    parser.add_argument("--xlim", nargs=2, type=float, metavar=("MIN", "MAX"),
+                        help="X-axis limits in degrees C, e.g. --xlim -20 40")
+    parser.add_argument("--ylim", nargs=2, type=float, metavar=("MIN", "MAX"),
+                        help="Y-axis limits in bar, e.g. --ylim 0 350")
     parser.add_argument("--ids", nargs="*", default=None,
                         help="Optional subset of IDs, e.g. --ids E05 E06 E18")
     parser.add_argument("--exclude-ids", nargs="*", default=None,
@@ -87,8 +116,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Optional subset of literature/experimental xCO2 values")
     parser.add_argument("--xco2-tol", type=float, default=5e-4,
                         help="Tolerance used by --xco2-values")
+    parser.add_argument("--literature-ids", nargs="*", default=None,
+                        help="Literature IDs to retain regardless of literature transition type")
+    parser.add_argument("--literature-transition-types", nargs="*", default=None,
+                        help="Transition types to retain from literature IDs not explicitly selected")
     parser.add_argument("--include-secondary", action="store_true")
     parser.add_argument("--include-literature", action="store_true")
+    parser.add_argument("--connect-literature", action="store_true",
+                        help="Connect literature points with the same source, composition, and transition")
+    parser.add_argument("--connect-literature-branches", action="store_true",
+                        help="Draw dashed interpolated joins between literature L->VL and L->LL branches")
     parser.add_argument("--label-points", action="store_true")
     parser.add_argument("--label-experimental-only", action="store_true",
                         help="With --label-points, label only non-literature points")
@@ -96,6 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="With --label-points, add one label per ID instead of one per point")
     parser.add_argument("--label-xco2", action="store_true",
                         help="Append molar composition xCO2 to point labels")
+    parser.add_argument("--legend-xco2", action="store_true",
+                        help="Append molar composition xCO2 to experimental legend entries")
     parser.add_argument("--color-by-xco2", action="store_true",
                         help="Use xCO2 as color scale instead of color by experiment ID")
     parser.add_argument("--same-style-by-source", action="store_true",
@@ -143,6 +182,8 @@ def filter_points(
     transition_types: list[str] | None,
     xco2_values: list[float] | None,
     xco2_tol: float,
+    literature_ids: list[str] | None,
+    literature_transition_types: list[str] | None,
     include_secondary: bool,
     include_literature: bool,
 ) -> pd.DataFrame:
@@ -178,6 +219,21 @@ def filter_points(
     if not include_literature:
         source = out.get("source", pd.Series("", index=out.index)).astype(str).str.lower()
         out = out[source != "literature"]
+    elif literature_ids or literature_transition_types:
+        source = out.get("source", pd.Series("", index=out.index)).astype(str).str.lower()
+        literature_keep = pd.Series(False, index=out.index)
+        source_families = pd.Series("", index=out.index)
+        if literature_ids:
+            literature_keep |= out["ID"].isin(literature_ids)
+            selected_families = {item.rsplit("_x", 1)[0] for item in literature_ids}
+            source_families = out["ID"].astype(str).map(lambda item: item.rsplit("_x", 1)[0])
+        if literature_transition_types:
+            transition_types_set = {item.lower() for item in literature_transition_types}
+            transition_keep = out["transition_type"].str.lower().isin(transition_types_set)
+            if literature_ids:
+                transition_keep &= ~source_families.isin(selected_families)
+            literature_keep |= transition_keep
+        out = out[(source != "literature") | literature_keep]
     return out
 
 
@@ -196,15 +252,58 @@ def plot_points(
     label_experimental_only: bool,
     label_ids_once: bool,
     label_xco2: bool,
+    legend_xco2: bool,
+    connect_literature: bool,
+    connect_literature_branches: bool,
     color_by_xco2: bool,
     same_style_by_source: bool,
+    xlim: list[float] | None,
+    ylim: list[float] | None,
 ) -> None:
     outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(8, 5.5), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(8.5, 7), constrained_layout=True)
 
     ids = list(dict.fromkeys(df["ID"].astype(str)))
     colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["black"])
     color_by_id = {exp_id: colors[i % len(colors)] for i, exp_id in enumerate(ids)}
+    sources = df.get("source", pd.Series("", index=df.index)).astype(str).str.lower()
+    drew_interpolated_join = False
+    if connect_literature:
+        literature = df[sources == "literature"].copy()
+        literature["_transition_group"] = literature["transition_type"].replace(
+            {"SLL": "TSL", "SL": "TSL"}
+        )
+        for _, group in literature.groupby(["ID", "xCO2", "_transition_group"], dropna=False):
+            if len(group) < 2:
+                continue
+            ordered = order_points_by_proximity(group)
+            exp_id = str(ordered["ID"].iloc[0])
+            ax.plot(
+                ordered["T_C"],
+                ordered["P_bar"],
+                color=color_by_id[exp_id],
+                linewidth=1.1,
+                alpha=0.7,
+                zorder=1,
+            )
+    if connect_literature_branches and not connect_literature:
+        literature = df[sources == "literature"]
+        for _, group in literature.groupby(["ID", "xCO2"], dropna=False):
+            l_to_ll = group[group["transition_type"] == "TLL"]
+            l_to_vl = group[group["transition_type"] == "LV"]
+            if l_to_ll.empty or l_to_vl.empty:
+                continue
+            vertical_branch = l_to_ll.loc[l_to_ll["P_bar"].astype(float).idxmin()]
+            horizontal_branch = l_to_vl.loc[l_to_vl["T_C"].astype(float).idxmin()]
+            start_x, start_y = float(horizontal_branch["T_C"]), float(horizontal_branch["P_bar"])
+            end_x, end_y = float(vertical_branch["T_C"]), float(vertical_branch["P_bar"])
+            control_x, control_y = end_x, start_y
+            fraction = np.linspace(0.0, 1.0, 40)
+            curve_x = (1 - fraction) ** 2 * start_x + 2 * (1 - fraction) * fraction * control_x + fraction ** 2 * end_x
+            curve_y = (1 - fraction) ** 2 * start_y + 2 * (1 - fraction) * fraction * control_y + fraction ** 2 * end_y
+            exp_id = str(group["ID"].iloc[0])
+            ax.plot(curve_x, curve_y, color=color_by_id[exp_id], linestyle="--", linewidth=1.2, alpha=0.8, zorder=1)
+            drew_interpolated_join = True
     scatter_for_colorbar = None
     if color_by_xco2:
         if "xCO2" not in df.columns or df["xCO2"].dropna().empty:
@@ -214,6 +313,13 @@ def plot_points(
         if np.isclose(xco2_min, xco2_max):
             xco2_min -= 0.001
             xco2_max += 0.001
+
+    def point_color(row: pd.Series, exp_id: str):
+        if color_by_xco2 and pd.notna(row.get("xCO2")):
+            return plt.get_cmap("viridis")(
+                (float(row["xCO2"]) - xco2_min) / (xco2_max - xco2_min)
+            )
+        return color_by_id[exp_id]
 
     label_count = 0
     rows_to_label = []
@@ -273,7 +379,7 @@ def plot_points(
             rows_to_label.append(row)
         elif label_points and not (label_experimental_only and is_literature):
             label = point_label(row, include_xco2=label_xco2)
-            label_color = color_by_id[exp_id]
+            label_color = point_color(row, exp_id)
             offset = LABEL_OFFSETS[label_count % len(LABEL_OFFSETS)]
             label_count += 1
             ax.annotate(
@@ -296,21 +402,25 @@ def plot_points(
         for label_count, (exp_id, group) in enumerate(label_df.groupby("ID", sort=False)):
             idx = group["P_bar"].astype(float).idxmax()
             row = group.loc[idx]
+            label = str(exp_id)
+            if label_xco2 and "xCO2" in row and pd.notna(row["xCO2"]):
+                label += f"\nxCO2={float(row['xCO2']):.4f}"
             offset = ID_LABEL_OFFSETS_BY_ID.get(
                 str(exp_id),
                 ID_LABEL_OFFSETS[label_count % len(ID_LABEL_OFFSETS)],
             )
+            annotation_color = point_color(row, str(exp_id))
             ax.annotate(
-                str(exp_id),
+                label,
                 (row["T_C"], row["P_bar"]),
                 xytext=offset,
                 textcoords="offset points",
                 fontsize=9,
                 fontweight="bold",
-                color=color_by_id[str(exp_id)],
+                color=annotation_color,
                 arrowprops={
                     "arrowstyle": "-",
-                    "color": color_by_id[str(exp_id)],
+                    "color": annotation_color,
                     "lw": 0.8,
                     "alpha": 0.85,
                 },
@@ -324,23 +434,47 @@ def plot_points(
 
     if not color_by_xco2:
         for exp_id, color in color_by_id.items():
-            ax.scatter([], [], color=color, label=exp_id)
+            label = exp_id
+            if legend_xco2:
+                matching_rows = df[(df["ID"].astype(str) == exp_id) & (sources != "literature")]
+                xco2 = matching_rows.get("xCO2", pd.Series(dtype=float)).dropna()
+                if not xco2.empty:
+                    label = f"{exp_id} (xCO2={float(xco2.iloc[0]):.4f})"
+            ax.scatter([], [], color=color, label=label)
+    else:
+        literature_references = df.loc[sources == "literature", "Referencia"].dropna().astype(str)
+        for reference in dict.fromkeys(literature_references):
+            ax.scatter([], [], marker="o", s=30, color="gray", alpha=0.42, label=reference)
+    transition_types = set(df["transition_type"])
+    equivalent_transition_types = {"TSL", "SLL", "SL"}
     for transition, marker in TRANSITION_MARKERS.items():
-        if transition in set(df["transition_type"]):
+        if transition in equivalent_transition_types:
+            continue
+        if transition in transition_types:
             ax.scatter([], [], color="black", marker=marker, label=transition)
+    if transition_types & equivalent_transition_types:
+        ax.scatter([], [], color="black", marker="s", label="TSL")
     if not same_style_by_source:
         ax.scatter([], [], marker="o", s=68, color="white", edgecolors="black",
-                   label="experimental")
+                   label="This work")
         ax.scatter([], [], marker="o", s=30, color="gray", alpha=0.42,
-                   label="literatura")
-    ax.scatter([], [], marker="o", facecolors="none", edgecolors="black",
-               label="P estimada")
+                   label="literature")
+    if sources.str.contains("estimado", case=False, na=False).any():
+        ax.scatter([], [], marker="o", facecolors="none", edgecolors="black",
+                   label="estimated P")
+    if connect_literature_branches and drew_interpolated_join:
+        ax.plot([], [], color="black", linestyle="--", linewidth=1.2,
+                label="interpolated join")
 
-    ax.set_title("P-T de puntos de transicion de fase")
-    ax.set_xlabel("T (C)")
+    ax.set_title("P-T Phase-Transition Points")
+    ax.set_xlabel("T sample (°C)")
     ax.set_ylabel("P (bar)")
+    if xlim:
+        ax.set_xlim(xlim)
+    if ylim:
+        ax.set_ylim(ylim)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, ncol=2, loc="upper right", framealpha=0.9)
+    ax.legend(fontsize=7, ncol=1, loc="upper right", framealpha=0.9)
     if color_by_xco2 and scatter_for_colorbar is not None:
         cb = fig.colorbar(scatter_for_colorbar, ax=ax)
         cb.set_label("xCO2")
@@ -359,6 +493,8 @@ def main() -> int:
         transition_types=args.transition_types,
         xco2_values=args.xco2_values,
         xco2_tol=args.xco2_tol,
+        literature_ids=args.literature_ids,
+        literature_transition_types=args.literature_transition_types,
         include_secondary=args.include_secondary,
         include_literature=args.include_literature,
     )
@@ -372,8 +508,13 @@ def main() -> int:
         label_experimental_only=args.label_experimental_only,
         label_ids_once=args.label_ids_once,
         label_xco2=args.label_xco2,
+        legend_xco2=args.legend_xco2,
+        connect_literature=args.connect_literature,
+        connect_literature_branches=args.connect_literature_branches,
         color_by_xco2=args.color_by_xco2,
         same_style_by_source=args.same_style_by_source,
+        xlim=args.xlim,
+        ylim=args.ylim,
     )
     print(f"Saved: {outpath}")
     return 0

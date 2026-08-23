@@ -1,51 +1,300 @@
-"""Publication-style DSC plotting."""
+"""Publication-style DSC cooling plots with an LL detail panel."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 import pandas as pd
 
 from .models import EventResult
 
 
+BLUE = "#2166ac"
+RED = "#b2182b"
+GRAY = "#777777"
+
+
+def _window_mask(temperature: np.ndarray, window: tuple[float, float] | None) -> np.ndarray:
+    if not window or len(window) != 2:
+        return np.zeros(len(temperature), dtype=bool)
+    low, high = sorted(float(value) for value in window)
+    return np.isfinite(temperature) & (temperature >= low) & (temperature <= high)
+
+
+def _fit_window(
+    temperature: np.ndarray,
+    heat_flow: np.ndarray,
+    window: tuple[float, float] | None,
+) -> tuple[np.ndarray, float, float] | None:
+    mask = _window_mask(temperature, window) & np.isfinite(heat_flow)
+    if mask.sum() < 3:
+        return None
+    low = float(np.nanmin(temperature[mask]))
+    high = float(np.nanmax(temperature[mask]))
+    return np.polyfit(temperature[mask], heat_flow[mask], 1), low, high
+
+
+def _draw_fit(
+    ax: plt.Axes,
+    fit: tuple[np.ndarray, float, float] | None,
+    x_low: float,
+    x_high: float,
+    *,
+    color: str,
+    linestyle: str,
+    linewidth: float = 1.4,
+    label: str | None = None,
+) -> None:
+    if fit is None:
+        return
+    coeffs = fit[0]
+    x = np.linspace(float(x_low), float(x_high), 80)
+    ax.plot(x, np.polyval(coeffs, x), color=color, linestyle=linestyle, linewidth=linewidth, label=label)
+
+
+def _event(results: list[EventResult], label: str) -> EventResult | None:
+    wanted = label.upper()
+    for result in results:
+        if (result.event_label or "").upper() == wanted:
+            return result
+    return None
+
+
+def _finite_onset(result: EventResult | None) -> float | None:
+    if result is None or result.onset_temp_c is None:
+        return None
+    return float(result.onset_temp_c) if np.isfinite(result.onset_temp_c) else None
+
+
+def _ll_region(temperature: np.ndarray, result: EventResult) -> tuple[float, float] | None:
+    points: list[float] = []
+    onset = _finite_onset(result)
+    if onset is not None:
+        points.append(onset)
+    if result.peak_temp_c is not None and np.isfinite(result.peak_temp_c):
+        points.append(float(result.peak_temp_c))
+    for window in (result.baseline_window_c, result.tangent_window_c):
+        if window:
+            points.extend(float(value) for value in window if np.isfinite(value))
+    if not points:
+        return None
+    data_low = float(np.nanmin(temperature))
+    data_high = float(np.nanmax(temperature))
+    onset = _finite_onset(result)
+    if onset is not None:
+        # Keep the LL detail readable: five degrees below the onset and eight
+        # degrees above it match the reference layout while remaining bounded
+        # by the available trace.
+        return max(data_low, onset - 5.0), min(data_high, onset + 8.0)
+    span = max(points) - min(points)
+    padding = max(1.0, 0.20 * span)
+    return max(data_low, min(points) - padding), min(data_high, max(points) + padding)
+
+
+def _add_cooling_arrow(ax: plt.Axes) -> None:
+    ax.annotate(
+        "Cooling",
+        xy=(0.82, 0.94),
+        xytext=(0.95, 0.94),
+        xycoords="axes fraction",
+        ha="center",
+        va="center",
+        fontsize=14,
+        arrowprops={"arrowstyle": "->", "linewidth": 1.5, "color": "black"},
+    )
+
+
+def _style_axis(ax: plt.Axes) -> None:
+    ax.spines["top"].set_visible(True)
+    ax.spines["right"].set_visible(True)
+    ax.tick_params(top=False, right=False)
+    ax.grid(False)
+
+
+def _draw_tsl_panel(
+    ax: plt.Axes,
+    temperature: np.ndarray,
+    heat_flow: np.ndarray,
+    result: EventResult | None,
+) -> None:
+    onset = _finite_onset(result)
+    if result is None or onset is None:
+        return
+    baseline_fit = _fit_window(temperature, heat_flow, result.baseline_window_c)
+    tangent_fit = _fit_window(temperature, heat_flow, result.tangent_window_c)
+    data_low = float(np.nanmin(temperature))
+    data_high = float(np.nanmax(temperature))
+    if baseline_fit is not None:
+        baseline_x = np.linspace(onset, data_high, 160)
+        baseline_y = np.polyval(baseline_fit[0], baseline_x)
+        ax.plot(baseline_x, baseline_y, color=BLUE, linewidth=1.4, label="SL baseline")
+        y_onset = float(np.polyval(baseline_fit[0], onset))
+    else:
+        y_onset = float(np.nanmedian(heat_flow))
+    if tangent_fit is not None:
+        _draw_fit(
+            ax,
+            tangent_fit,
+            max(data_low, tangent_fit[1]),
+            min(data_high, tangent_fit[2]),
+            color=BLUE,
+            linestyle="-",
+            linewidth=1.2,
+            label="SL tangent",
+        )
+    local_mask = (temperature >= onset - 1.0) & (temperature <= onset + 1.0)
+    local_values = heat_flow[local_mask]
+    if len(local_values) >= 3:
+        local_low = float(np.nanmin(local_values))
+        local_high = float(np.nanmax(local_values))
+    else:
+        local_low = float(np.nanmin(heat_flow))
+        local_high = float(np.nanmax(heat_flow))
+    local_span = max(local_high - local_low, 1e-9)
+    ax.vlines(onset, y_onset - 0.05 * local_span, y_onset + 0.8 * local_span, color=BLUE, linewidth=1.5)
+    ax.scatter([onset], [y_onset], s=65, facecolor="white", edgecolor=BLUE, linewidth=2, zorder=6)
+    ax.text(
+        onset + 0.6,
+        y_onset + 0.08 * local_span,
+        rf"$T_{{SL}}$ = {onset:.3f} °C",
+        color=BLUE,
+        fontsize=14,
+    )
+
+
+def _draw_tll_zoom(
+    ax: plt.Axes,
+    temperature: np.ndarray,
+    heat_flow: np.ndarray,
+    result: EventResult,
+    region: tuple[float, float],
+) -> None:
+    low, high = region
+    mask = (temperature >= low) & (temperature <= high) & np.isfinite(heat_flow)
+    ax.plot(temperature[mask], heat_flow[mask], color="black", linewidth=1.0)
+    onset = _finite_onset(result)
+    if onset is None:
+        return
+
+    baseline_fit = _fit_window(temperature, heat_flow, result.baseline_window_c)
+    tangent_fit = _fit_window(temperature, heat_flow, result.tangent_window_c)
+    span = high - low
+    if baseline_fit is not None:
+        baseline_low = max(low, onset)
+        _draw_fit(
+            ax,
+            baseline_fit,
+            baseline_low,
+            high,
+            color=RED,
+            linestyle="--",
+            linewidth=1.7,
+            label="LL baseline",
+        )
+        y_onset = float(np.polyval(baseline_fit[0], onset))
+    else:
+        y_onset = float(np.nanmedian(heat_flow[mask]))
+    if tangent_fit is not None:
+        tangent_low = max(low, tangent_fit[1] - 0.18 * span)
+        tangent_high = min(high, tangent_fit[2] + 0.18 * span)
+        _draw_fit(
+            ax,
+            tangent_fit,
+            tangent_low,
+            tangent_high,
+            color=RED,
+            linestyle="-",
+            linewidth=2.0,
+            label="LL tangent",
+        )
+    ax.scatter([onset], [y_onset], s=65, facecolor="white", edgecolor=RED, linewidth=2, zorder=6)
+    y_min = float(np.nanmin(heat_flow[mask]))
+    y_max = float(np.nanmax(heat_flow[mask]))
+    ax.text(
+        onset + 0.08 * span,
+        y_min + 0.35 * (y_max - y_min),
+        rf"$T_{{LL}}$ = {onset:.3f} °C",
+        color=RED,
+        fontsize=14,
+    )
+
+
 def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Path) -> Path:
+    """Plot a full cooling trace and a separate zoom of the LL region."""
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(9, 10),
+        gridspec_kw={"height_ratios": [1.0, 1.0]},
+        constrained_layout=True,
+    )
     temp = segment["temperature_c"].to_numpy(float)
-    hf = segment["heat_flow_mw"].to_numpy(float)
+    heat_flow = segment["heat_flow_mw"].to_numpy(float)
+    valid = np.isfinite(temp) & np.isfinite(heat_flow)
+    temp = temp[valid]
+    heat_flow = heat_flow[valid]
+    if len(temp) == 0:
+        raise ValueError("Cannot plot an empty thermogram")
 
-    axes[0].plot(temp, hf, color="black", lw=1)
-    axes[0].set_xlabel("Temperature (°C)")
-    axes[0].set_ylabel("Heat flow (mW)")
-    axes[0].text(0.03, 0.95, "Exo ↑", transform=axes[0].transAxes, va="top")
-    axes[0].annotate("Cooling", xy=(0.78, 0.1), xytext=(0.55, 0.1), xycoords="axes fraction", arrowprops={"arrowstyle": "->"})
+    full_ax, zoom_ax = axes
+    full_ax.plot(temp, heat_flow, color="black", linewidth=1.0)
+    full_ax.set_xlim(float(np.nanmin(temp)), float(np.nanmax(temp)))
+    full_ax.set_xlabel("Temperature (°C)")
+    full_ax.set_ylabel("Heat flow (mW)")
+    full_ax.text(0.015, 0.93, "(a)", transform=full_ax.transAxes, fontsize=16, fontweight="bold")
+    full_ax.text(0.03, 0.83, "Exo ↑", transform=full_ax.transAxes, fontsize=14)
+    _add_cooling_arrow(full_ax)
+    _draw_tsl_panel(full_ax, temp, heat_flow, _event(results, "TSL"))
 
-    finite_onsets = [r.onset_temp_c for r in results if r.onset_temp_c is not None]
-    if finite_onsets:
-        center = float(np.mean(finite_onsets))
-        width = max(2.0, float(np.ptp(finite_onsets)) + 1.0)
-        mask = (temp >= center - width) & (temp <= center + width)
+    tll = _event(results, "TLL")
+    region = _ll_region(temp, tll) if tll is not None else None
+    if region is None:
+        zoom_ax.set_axis_off()
+        zoom_ax.text(0.5, 0.5, "TLL no detectado automáticamente", transform=zoom_ax.transAxes, ha="center", va="center")
     else:
-        mask = np.ones(len(temp), dtype=bool)
-    axes[1].plot(temp[mask], hf[mask], color="black", lw=1)
-    for result in results:
-        if result.onset_temp_c is not None:
-            axes[0].axvline(result.onset_temp_c, color="tab:red", lw=0.8)
-            axes[1].axvline(result.onset_temp_c, color="tab:red", lw=0.8)
-            axes[1].text(result.onset_temp_c, np.nanmax(hf[mask]), result.event_label, rotation=90, va="top")
-    axes[1].set_xlabel("Temperature (°C)")
-    axes[1].set_ylabel("Heat flow (mW)")
+        low, high = region
+        region_mask = (temp >= low) & (temp <= high)
+        region_y = heat_flow[region_mask]
+        y_min = float(np.nanmin(region_y))
+        y_max = float(np.nanmax(region_y))
+        y_pad = max(0.02 * (y_max - y_min), 0.0005)
+        full_ax.add_patch(
+            Rectangle(
+                (low, y_min - y_pad),
+                high - low,
+                (y_max - y_min) + 2 * y_pad,
+                fill=False,
+                edgecolor=GRAY,
+                linestyle="--",
+                linewidth=1.2,
+                zorder=4,
+            )
+        )
+        full_ax.annotate(
+            "Region enlarged in (b)",
+            xy=((low + high) / 2, y_max + y_pad),
+            xytext=(0.47, 0.75),
+            textcoords="axes fraction",
+            color=GRAY,
+            fontsize=14,
+            ha="center",
+            arrowprops={"arrowstyle": "->", "color": GRAY, "linewidth": 1.2},
+        )
+        _draw_tll_zoom(zoom_ax, temp, heat_flow, tll, region)
+        zoom_ax.set_xlim(low, high)
+        zoom_ax.set_xlabel("Temperature (°C)")
+        zoom_ax.set_ylabel("Heat flow (mW)")
+        zoom_ax.text(0.015, 0.92, "(b)", transform=zoom_ax.transAxes, fontsize=16, fontweight="bold")
+        zoom_ax.text(0.06, 0.83, "Exo ↑", transform=zoom_ax.transAxes, fontsize=14)
+        _add_cooling_arrow(zoom_ax)
 
     for ax in axes:
-        ax.spines["top"].set_visible(True)
-        ax.spines["right"].set_visible(True)
-        ax.tick_params(top=False, right=False)
-        ax.grid(False)
-        ax.invert_xaxis()
+        _style_axis(ax)
 
     fig.savefig(out_path, dpi=600)
     fig.savefig(out_path.with_suffix(".pdf"))

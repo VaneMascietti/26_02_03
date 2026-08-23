@@ -108,9 +108,13 @@ def read_txt(path: str | Path) -> DSCData:
     if sample_temp_col is None:
         warnings.add("Sample Temperature is not available; Furnace Temperature was used.")
 
+    time_scale = 60.0 if re.search(r"minute|\bmin\b", time_col, flags=re.IGNORECASE) else 1.0
+    if time_scale != 1.0:
+        warnings.add(f"{time_col} interpreted as minutes and converted to seconds.")
+
     frame = pd.DataFrame(
         {
-            "time_s": raw[time_col].map(_to_float),
+            "time_s": raw[time_col].map(_to_float) * time_scale,
             "temperature_c": raw[temperature_col].map(_to_float),
             "heat_flow_mw": raw[heat_col].map(_to_float),
         }
@@ -148,4 +152,3 @@ def read_txt(path: str | Path) -> DSCData:
         temperature_source=temperature_source,
         warnings=warnings.messages,
     )
-

@@ -27,18 +27,5 @@ E08,26/03 + 27/03,L05 corregida,0.9037,PE/XPE,bano 20 C + cooling,2,C2,TLL,29.45
 E08,26/03 + 27/03,L05 corregida,0.9037,PE/XPE,bano 20 C + cooling,2,C2,TSL,7.53,177.1,tabla,,
 E09,31/03 + 06/04,L05 corregida,0.9037,PE/XPE,beta_h=beta_c=0.05,1,C1,TLL,36.944,165.3,tabla,,LL menos robusto
 E09,31/03 + 06/04,L05 corregida,0.9037,PE/XPE,beta_h=beta_c=0.05,1,C1,TSL,7.37,96.2,tabla,,LL menos robusto
-E10,15/04 + 16/04,L06,~0.937*,aerogel,nuevo termopar + vazamento,1,C1,TLL,27.556,290.8,tabla,,composicion aparente; PICO SL chico
-E10,15/04 + 16/04,L06,~0.937*,aerogel,nuevo termopar + vazamento,1,C1,TSL,8.42,279.9,tabla,,composicion aparente; PICO SL chico
-E11,17/04 + 20/04,L07,0.916,aerogel,48 h a 60 C / termopar,1,C1,TLL,32.425,326.8,tabla,,nueva carga
-E11,17/04 + 20/04,L07,0.916,aerogel,48 h a 60 C / termopar,1,C1,TSL,7.621,318.2,tabla,,nueva carga
-E12,29/04 + 30/04,L07,0.916,No,sin aislante + con termopar,1,C1,TLL,33.071,260.2,tabla,,contraste sin aislante
-E12,29/04 + 30/04,L07,0.916,No,sin aislante + con termopar,1,C1,TSL,7.383,241,tabla,,contraste sin aislante
-E13,08/05 + 11/05,L08,0.8941,No,Sin termopar / microesferas,1,C1,TSL,7.286,,tabla sin P,,Muchisimo ruido
-E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,TLL,36.458,307.6,tabla,,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
-E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,TSL,7.338,293.7,tabla,,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
-E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,secondary,47.44,316.2,tabla,secundaria,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
-E18,14/06+15/06,L11,0.9004,No,Repeticion del E06,2,C1,secondary,14.046,295,tabla,secundaria,secundarias 47.44 C / 316.2 bar e 14.046 C / 295 bar (pico estrecho)
-E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,TLL,33.623,256.4,tabla,,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)
-E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,TSL,7.522,245.3,tabla,,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)
-E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,secondary,38.623,265.3,tabla,secundaria,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)
-E18,14/06+15/07,L11,0.9048,No,Repeticion del E06,2,C2,secondary,11.308,246.9,tabla,secundaria,secundarias 38.623 C / 265.3 bar e 11.308 C / 246.9 bar (Pico estrecho)
+E10,15/04 + 16/04,L06,0.9370,aerogel,nuevo termopar + vazamento,1,C1,TLL,27.556,290.8,tabla,,composicion aparente; PICO SL chico
+E10,15/04 + 16/04,L06,0.9370,aerogel,nuevo termopar + vazamento,1,C1,TSL,8.42,279.9,tabla,,composicion aparente; PICO SL chico
