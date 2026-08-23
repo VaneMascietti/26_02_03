@@ -52,8 +52,28 @@ def _read_rows(path: Path, warnings: WarningLog) -> tuple[list[str], list[list[s
     if not lines:
         raise ValueError(f"{path} is empty")
 
-    delimiter = _pick_delimiter(lines[0])
-    reader = csv.reader(io.StringIO("\n".join(lines)), delimiter=delimiter)
+    # Calisto exports may prepend metadata (creation date, mass, etc.) before
+    # the actual table. Locate the first line containing both required fields
+    # instead of assuming that the first non-empty line is the header.
+    header_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if re.search(r"\btime\b", line, flags=re.IGNORECASE)
+            and re.search(r"heat\s*flow|heatflow", line, flags=re.IGNORECASE)
+        ),
+        None,
+    )
+    if header_index is None:
+        raise ValueError(f"{path} does not contain a recognizable table header")
+    if header_index:
+        warnings.add(
+            f"Ignored {header_index} metadata line(s) before the table header in {path.name}."
+        )
+
+    table_lines = lines[header_index:]
+    delimiter = _pick_delimiter(table_lines[0])
+    reader = csv.reader(io.StringIO("\n".join(table_lines)), delimiter=delimiter)
     rows = list(reader)
     header = [cell.strip() for cell in rows[0]]
     while header and header[-1] == "":
