@@ -27,8 +27,8 @@ DEFAULT_LITERATURE = Path("data/phase_transitions/literature_points.csv")
 DEFAULT_OUTDIR = Path("out/figures/phase_transitions")
 
 TRANSITION_MARKERS = {
-    "TLL": "o",
-    "TSL": "s",
+    "LL": "o",
+    "SL": "s",
     "TIAC": "s",
     "secondary": "^",
     "LLV": "v",
@@ -61,7 +61,7 @@ ID_LABEL_OFFSETS_BY_ID = {
     "E05": (18, 18),
     "E06": (-48, -18),
     "E07": (22, -2),
-    "E18": (28, -10),
+    "E14": (28, -10),
 }
 
 
@@ -105,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ylim", nargs=2, type=float, metavar=("MIN", "MAX"),
                         help="Y-axis limits in bar, e.g. --ylim 0 350")
     parser.add_argument("--ids", nargs="*", default=None,
-                        help="Optional subset of IDs, e.g. --ids E05 E06 E18")
+                        help="Optional subset of IDs, e.g. --ids E05 E06 E14")
     parser.add_argument("--exclude-ids", nargs="*", default=None,
                         help="IDs to remove after other filters, e.g. --exclude-ids E05")
     parser.add_argument("--cycles", nargs="*", default=None,

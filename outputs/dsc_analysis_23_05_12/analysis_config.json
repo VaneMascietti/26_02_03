@@ -1,0 +1,7 @@
+{
+  "snr_detected": 3.0,
+  "snr_doubtful": 2.0,
+  "min_persistence_points": 8,
+  "min_delta_bic": 10.0,
+  "event_window_points": 80
+}

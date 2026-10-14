@@ -184,6 +184,38 @@ def test_load_lvm_detects_trailing_sample_pressure_layout(tmp_path):
     assert np.allclose(df["P_referencia"].to_numpy(), [422.5] * 5)
 
 
+def test_load_lvm_detects_pressure_after_heatflow_layout(tmp_path):
+    lvm_path = tmp_path / "pressure_after_heatflow.lvm"
+    rows = []
+    for i, p_sample in enumerate([270.2, 300.4, 360.8, 420.1, 521.8]):
+        rows.append(
+            "\t".join(
+                [
+                    "",
+                    "46.8",
+                    "266.05",
+                    str([36, 2500, 9000, 18000, 32000][i]),
+                    str(20.15 + i),
+                    str(20.16 + i),
+                    str(0.76 + i),
+                    str(27.3 + i),
+                    str(p_sample),
+                    str(20.7 + i),
+                    f"8/17/2026 6:12:{15 + i:02d} PM",
+                ]
+            )
+        )
+    lvm_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    df = load_lvm(lvm_path)
+
+    assert np.allclose(df["P_bomba_bar"].to_numpy(), [46.8] * 5)
+    assert np.allclose(df["P_muestra"].to_numpy(), [270.2, 300.4, 360.8, 420.1, 521.8])
+    assert np.allclose(df["T_muestra"].to_numpy(), [20.15, 21.15, 22.15, 23.15, 24.15])
+    assert np.allclose(df["T_banho"].to_numpy(), [20.7, 21.7, 22.7, 23.7, 24.7])
+    assert np.allclose(df["HF_mW"].to_numpy(), [0.76, 1.76, 2.76, 3.76, 4.76])
+
+
 def test_extra_onsets_from_temperature_targets_maps_to_nearest_points():
     clean = pd.DataFrame(
         {
