@@ -1,0 +1,4 @@
+Sample Temperature is not available; Furnace Temperature was used.
+Time is not monotonically increasing; original row order was preserved.
+Detected 482 duplicate time values.
+Detected 57388 temporal jumps larger than 5x median dt.

@@ -61,6 +61,30 @@ def _uses_trailing_sample_pressure(raw_df: pd.DataFrame) -> bool:
     return trailing_is_pressure and leading_is_nearly_constant and trailing_has_signal
 
 
+def _uses_pressure_after_heatflow(raw_df: pd.DataFrame) -> bool:
+    """Identify exports where the sample pressure follows the heat-flow columns."""
+    if raw_df.shape[1] < 10:
+        return False
+
+    column_2 = pd.to_numeric(raw_df.iloc[:, 2], errors="coerce").dropna()
+    column_7 = pd.to_numeric(raw_df.iloc[:, 7], errors="coerce").dropna()
+    column_8 = pd.to_numeric(raw_df.iloc[:, 8], errors="coerce").dropna()
+    if column_2.empty or column_7.empty or column_8.empty:
+        return False
+
+    q2_25, q2_75 = column_2.quantile([0.25, 0.75])
+    q7_05, q7_25, q7_75, q7_95 = column_7.quantile([0.05, 0.25, 0.75, 0.95])
+    q8_05, q8_95 = column_8.quantile([0.05, 0.95])
+    column_2_iqr = float(q2_75 - q2_25)
+    column_7_iqr = float(q7_75 - q7_25)
+
+    counter_like = column_2_iqr >= 100.0
+    pressure_like = 1.0 <= float(q7_05) and float(q7_95) <= 1000.0
+    pressure_has_signal = column_7_iqr >= 2.0
+    following_column_not_pressure = float(q8_05) < 1.0 or float(q8_95) < 100.0
+    return counter_like and pressure_like and pressure_has_signal and following_column_not_pressure
+
+
 def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
     """Load an instrument LVM export using the repository's canonical columns."""
     df = pd.read_csv(path, sep="\t", header=None, engine="python")
@@ -68,23 +92,40 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
         df = df.iloc[:, 1:].copy()
         df.columns = range(df.shape[1])
 
-    trailing_sample_pressure = _uses_trailing_sample_pressure(df)
+    pressure_after_heatflow = _uses_pressure_after_heatflow(df)
+    trailing_sample_pressure = (
+        False if pressure_after_heatflow else _uses_trailing_sample_pressure(df)
+    )
     datetime_column = df.shape[1] - 1
-    rename_map = {
-        0: "P_bomba_bar",
-        1: "V_bomba_ml",
-        2: "P_referencia_bar" if trailing_sample_pressure else "P_muestra_bar",
-        3: "_col4",
-        4: "T_muestra",
-        5: "T_horno",
-        6: "HF_uV",
-        7: "HF_mW",
-        datetime_column: "datetime",
-    }
-    if df.shape[1] >= 10:
-        rename_map[datetime_column - 1] = (
-            "P_muestra_bar" if trailing_sample_pressure else "P_referencia_bar"
-        )
+    if pressure_after_heatflow:
+        rename_map = {
+            0: "P_bomba_bar",
+            1: "V_bomba_ml",
+            2: "_col4",
+            3: "T_muestra",
+            4: "T_horno",
+            5: "HF_mW",
+            6: "HF_uV",
+            7: "P_muestra_bar",
+            8: "T_banho",
+            datetime_column: "datetime",
+        }
+    else:
+        rename_map = {
+            0: "P_bomba_bar",
+            1: "V_bomba_ml",
+            2: "P_referencia_bar" if trailing_sample_pressure else "P_muestra_bar",
+            3: "_col4",
+            4: "T_muestra",
+            5: "T_horno",
+            6: "HF_uV",
+            7: "HF_mW",
+            datetime_column: "datetime",
+        }
+        if df.shape[1] >= 10:
+            rename_map[datetime_column - 1] = (
+                "P_muestra_bar" if trailing_sample_pressure else "P_referencia_bar"
+            )
     df = df.rename(columns=rename_map)
     df = _drop_leading_counter_wrap(df)
 
