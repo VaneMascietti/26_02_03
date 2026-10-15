@@ -227,6 +227,18 @@ Salidas principales:
 
 El parser detecta TXT UTF-16 con delimitador final, convierte automáticamente `Time(min)` a segundos, prefiere `Sample Temperature` cuando existe y avisa cuando utiliza `Furnace Temperature`. El PDF se interpreta por zonas del programa térmico. En cada enfriamiento, el evento de mayor temperatura se etiqueta `TLL` y el de menor temperatura `TSL`; el estado (`detected`/`doubtful`) indica la confianza automática y requiere confirmación experimental cuando sea dudoso.
 
+## Exportaciones DSC de TA Instruments TRIOS
+
+Los archivos Excel binarios `.xls` exportados por TRIOS se procesan con un flujo separado. El lector conserva las unidades originales, identifica las hojas con columnas `Time`, `Temperature` y `Heat Flow`, y selecciona automáticamente las rampas de enfriamiento.
+
+```bash
+.venv/bin/python trios_cli.py \
+  --xls "data/100724_etoh_nc16_0.851w_0.2rate.xls" \
+  --outdir out/trios_100724_etoh_nc16
+```
+
+Las salidas incluyen dos figuras del enfriamiento en `figures/`: una contra temperatura y otra contra tiempo con ejes Y separados para temperatura y heat flow. El primer onset exotérmico se calcula en el dominio del tiempo mediante la intersección entre la línea base previa y la tangente del primer flanco, y se guarda en `trios_onsets.csv`. También se guardan los datos de la rampa en `tables/cooling_01.csv`, el resumen `trios_segments.csv` y la metadata `trios_details.json`.
+
 Chequeo de sintaxis:
 
 ```bash

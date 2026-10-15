@@ -26,6 +26,7 @@ data/raw/
 # Instrument files
 *.lvm
 *.tdms
+*.xls
 
 # Git metadata kept outside the read-only .git mount in this environment
 .gitmeta/

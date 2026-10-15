@@ -22,8 +22,10 @@ DEFAULT_CONFIG = {
     # broad transition.  Keep this branch opt-in by temperature range so the
     # regular multi-event behavior used by the 50 -> 10 C scans is unchanged.
     "low_temperature_pair_max_c": 35.0,
-    "low_temperature_ll_low_delta_c": 0.10,
-    "low_temperature_ll_high_delta_c": 1.10,
+    "low_temperature_ll_tangent_low_delta_c": 0.36,
+    "low_temperature_ll_tangent_high_delta_c": 0.66,
+    "low_temperature_ll_baseline_low_delta_c": 0.86,
+    "low_temperature_ll_baseline_high_delta_c": 1.36,
     "low_temperature_sl_tangent_half_window": 36,
 }
 
@@ -86,28 +88,42 @@ def _classify(metrics: NoiseMetrics, config: dict[str, float]) -> tuple[str, str
     return "not detected", "low"
 
 
-def _broad_tangent_onset(
+def _ll_tangent_onset(
     temperature: np.ndarray,
     heat_flow: np.ndarray,
     baseline_mask: np.ndarray,
     event_index: int,
     config: dict[str, float],
 ) -> tuple[float, tuple[float, float], tuple[float, float], float] | None:
-    """Estimate an LL onset from the broad shoulder around a sharp SL event."""
+    """Estimate LL from a local flank and a stable high-temperature baseline."""
 
     event_temperature = float(temperature[event_index])
-    low = event_temperature - float(config["low_temperature_ll_low_delta_c"])
-    high = event_temperature + float(config["low_temperature_ll_high_delta_c"])
+    tangent_low = event_temperature + float(config["low_temperature_ll_tangent_low_delta_c"])
+    tangent_high = event_temperature + float(config["low_temperature_ll_tangent_high_delta_c"])
     tangent_mask = (
         np.isfinite(temperature)
         & np.isfinite(heat_flow)
-        & (temperature >= low)
-        & (temperature <= high)
+        & (temperature >= tangent_low)
+        & (temperature <= tangent_high)
     )
-    if tangent_mask.sum() < 8 or baseline_mask.sum() < 8:
+    baseline_low = event_temperature + float(config["low_temperature_ll_baseline_low_delta_c"])
+    baseline_high = event_temperature + float(config["low_temperature_ll_baseline_high_delta_c"])
+    ll_baseline_mask = (
+        np.isfinite(temperature)
+        & np.isfinite(heat_flow)
+        & (temperature >= baseline_low)
+        & (temperature <= baseline_high)
+    )
+    if ll_baseline_mask.sum() < 8:
+        ll_baseline_mask = baseline_mask
+    if tangent_mask.sum() < 8 or ll_baseline_mask.sum() < 8:
         return None
 
-    baseline_coeffs = robust_polyfit(temperature[baseline_mask], heat_flow[baseline_mask], degree=1)
+    baseline_coeffs = robust_polyfit(
+        temperature[ll_baseline_mask],
+        heat_flow[ll_baseline_mask],
+        degree=1,
+    )
     tangent_coeffs = robust_polyfit(temperature[tangent_mask], heat_flow[tangent_mask], degree=1)
     denominator = float(baseline_coeffs[0] - tangent_coeffs[0])
     if abs(denominator) < 1e-12:
@@ -119,8 +135,8 @@ def _broad_tangent_onset(
         return None
 
     baseline_window = (
-        float(np.nanmin(temperature[baseline_mask])),
-        float(np.nanmax(temperature[baseline_mask])),
+        float(np.nanmin(temperature[ll_baseline_mask])),
+        float(np.nanmax(temperature[ll_baseline_mask])),
     )
     tangent_window = (
         float(np.nanmin(temperature[tangent_mask])),
@@ -253,7 +269,7 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
         )
 
     if low_temperature_pair and results:
-        broad = _broad_tangent_onset(
+        broad = _ll_tangent_onset(
             temperature,
             heat_flow,
             selected[0][3],
@@ -283,8 +299,8 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
                 baseline_window_c=baseline_window,
                 tangent_window_c=tangent_window,
                 notes=(
-                    "LL estimated from the broad tangent around the low-temperature "
-                    "SL transition; manual confirmation is required."
+                    "LL estimated from a tangent fitted to the local flank and a "
+                    "stable high-temperature baseline; manual confirmation is required."
                 ),
             )
             results.insert(0, tll)

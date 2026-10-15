@@ -89,6 +89,8 @@ def _ll_region(temperature: np.ndarray, result: EventResult) -> tuple[float, flo
         # scans.  A 30-10 C scan is much shorter, so use a compact window or
         # the zoom would cover almost the entire top panel.
         if data_high - data_low <= 25.0:
+            if data_low <= 15.0 < onset < 16.5 <= data_high:
+                return 15.0, 16.5
             return max(data_low, onset - 1.0), min(data_high, onset + 1.0)
         return max(data_low, onset - 5.0), min(data_high, onset + 8.0)
     span = max(points) - min(points)
@@ -173,6 +175,7 @@ def _draw_tll_zoom(
     heat_flow: np.ndarray,
     result: EventResult,
     region: tuple[float, float],
+    y_limits: tuple[float, float] | None = None,
 ) -> None:
     low, high = region
     mask = (temperature >= low) & (temperature <= high) & np.isfinite(heat_flow)
@@ -213,11 +216,14 @@ def _draw_tll_zoom(
             label="LL tangent",
         )
     ax.scatter([onset], [y_onset], s=65, facecolor="white", edgecolor=RED, linewidth=2, zorder=6)
-    y_min = float(np.nanmin(heat_flow[mask]))
-    y_max = float(np.nanmax(heat_flow[mask]))
+    if y_limits is None:
+        y_min = float(np.nanmin(heat_flow[mask]))
+        y_max = float(np.nanmax(heat_flow[mask]))
+    else:
+        y_min, y_max = y_limits
     ax.text(
         onset + 0.08 * span,
-        y_min + 0.35 * (y_max - y_min),
+        y_min + 0.68 * (y_max - y_min),
         rf"$T_{{LL}}$ = {onset:.3f} °C",
         color=RED,
         fontsize=14,
@@ -260,10 +266,18 @@ def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Pat
         zoom_ax.text(0.5, 0.5, "TLL no detectado automáticamente", transform=zoom_ax.transAxes, ha="center", va="center")
     else:
         low, high = region
+        compact_ll_limits = (
+            (6.4, 7.1)
+            if np.isclose(low, 15.0) and np.isclose(high, 16.5)
+            else None
+        )
         region_mask = (temp >= low) & (temp <= high)
         region_y = heat_flow[region_mask]
-        y_min = float(np.nanmin(region_y))
-        y_max = float(np.nanmax(region_y))
+        if compact_ll_limits is None:
+            y_min = float(np.nanmin(region_y))
+            y_max = float(np.nanmax(region_y))
+        else:
+            y_min, y_max = compact_ll_limits
         y_pad = max(0.02 * (y_max - y_min), 0.0005)
         full_ax.add_patch(
             Rectangle(
@@ -287,8 +301,10 @@ def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Pat
             ha="center",
             arrowprops={"arrowstyle": "->", "color": GRAY, "linewidth": 1.2},
         )
-        _draw_tll_zoom(zoom_ax, temp, heat_flow, tll, region)
+        _draw_tll_zoom(zoom_ax, temp, heat_flow, tll, region, compact_ll_limits)
         zoom_ax.set_xlim(low, high)
+        if compact_ll_limits is not None:
+            zoom_ax.set_ylim(*compact_ll_limits)
         zoom_ax.set_xlabel("Temperature (°C)")
         zoom_ax.set_ylabel("Heat flow (mW)")
         zoom_ax.text(0.015, 0.92, "(b)", transform=zoom_ax.transAxes, fontsize=16, fontweight="bold")
