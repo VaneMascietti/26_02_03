@@ -77,7 +77,8 @@ def analyse_noise(
     max_abs = float(np.max(np.abs(event))) if len(event) else 0.0
     snr = max_abs / scale
     integrated_snr = float(np.abs(np.sum(event)) / (scale * np.sqrt(max(len(event), 1))))
-    consecutive = _max_run(np.abs(residuals) > 2 * scale)
+    # Preserve mask gaps: separate candidates must never form one persistent run.
+    consecutive = _max_run(np.asarray(event_mask, dtype=bool) & (np.abs(residuals) > 2 * scale))
     corr_len = _correlation_length(baseline) if len(baseline) > 5 else 1
 
     rss_base = float(np.sum(np.square(residuals)))

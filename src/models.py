@@ -96,7 +96,7 @@ class DSCData:
     frame: pd.DataFrame
     original_columns: list[str]
     time_column: str
-    temperature_column: str
+    temperature_column: str | None
     heat_flow_column: str
     temperature_source: str
     warnings: list[str] = field(default_factory=list)

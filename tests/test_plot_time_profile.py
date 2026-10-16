@@ -32,3 +32,19 @@ def test_time_profile_writes_sample_and_bath_temperature_plot(tmp_path: Path):
 
     assert outpath.is_file()
     assert outpath.stat().st_size > 0
+
+
+def test_onsets_interpolate_signals_and_reject_ambiguous_crossings():
+    import pytest
+    from plot_time_profile import onset_intersections
+
+    data = pd.DataFrame({
+        "plot_time": [0., 1., 2., 3.], "T_muestra": [30., 20., 30., 20.],
+        "P_muestra": [310., 290., 310., 290.], "HF_mW": [2., 4., 2., 4.],
+    })
+    with pytest.raises(ValueError, match="2 cooling crossings"):
+        onset_intersections(data, [25.])
+    result = onset_intersections(data, [25.], time_max=1.)[0]
+    assert result == {"plot_time": .5, "T_muestra": 25., "P_muestra": 300., "HF_mW": 3.}
+    with pytest.raises(ValueError, match="0 cooling crossings"):
+        onset_intersections(data, [10.])

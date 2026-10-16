@@ -22,6 +22,11 @@ def main() -> None:
 
     st.set_page_config(page_title="DSC/uDSC analyzer", layout="wide")
     st.title("DSC/uDSC analyzer")
+    workflow = st.sidebar.selectbox("Workflow", ["Common calorimetry", "Legacy Calisto"])
+    if workflow == "Common calorimetry":
+        from src.calorimetry_app import main as common_app
+        common_app(st)
+        return
 
     pdf_file = st.file_uploader("Calisto PDF", type=["pdf"])
     txt_file = st.file_uploader("Calisto TXT", type=["txt"])

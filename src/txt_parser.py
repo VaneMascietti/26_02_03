@@ -104,7 +104,7 @@ def _find_column(columns: list[str], variants: list[str]) -> str | None:
     return None
 
 
-def read_txt(path: str | Path) -> DSCData:
+def read_txt(path: str | Path, *, require_temperature: bool = True) -> DSCData:
     """Read one Calisto TXT file and return canonical columns."""
 
     source = Path(path)
@@ -126,11 +126,11 @@ def read_txt(path: str | Path) -> DSCData:
         raise ValueError(f"{source} does not contain recognizable time and heat-flow columns")
 
     temperature_col = sample_temp_col or furnace_temp_col
-    if temperature_col is None:
+    if temperature_col is None and require_temperature:
         raise ValueError(f"{source} does not contain a recognizable temperature column")
 
-    temperature_source = "sample" if sample_temp_col else "furnace"
-    if sample_temp_col is None:
+    temperature_source = "sample" if sample_temp_col else "furnace" if furnace_temp_col else "unavailable"
+    if sample_temp_col is None and furnace_temp_col is not None:
         warnings.add("Sample Temperature is not available; Furnace Temperature was used.")
 
     time_scale = 60.0 if re.search(r"minute|\bmin\b", time_col, flags=re.IGNORECASE) else 1.0
@@ -140,7 +140,7 @@ def read_txt(path: str | Path) -> DSCData:
     frame = pd.DataFrame(
         {
             "time_s": raw[time_col].map(_to_float) * time_scale,
-            "temperature_c": raw[temperature_col].map(_to_float),
+            "temperature_c": raw[temperature_col].map(_to_float) if temperature_col else np.nan,
             "heat_flow_mw": raw[heat_col].map(_to_float),
         }
     )
@@ -159,7 +159,13 @@ def read_txt(path: str | Path) -> DSCData:
     for col, count in missing.items():
         if int(count):
             warnings.add(f"{col} contains {int(count)} missing/non-numeric values.")
-    frame = frame.dropna(subset=["time_s", "temperature_c", "heat_flow_mw"]).reset_index(drop=True)
+    required_signals = ["time_s", "heat_flow_mw"]
+    if require_temperature:
+        required_signals.append("temperature_c")
+    frame = frame.dropna(subset=required_signals).reset_index(drop=True)
+    if temperature_col is None:
+        frame = frame.drop(columns="temperature_c")
+        warnings.add("Temperature is unavailable; time-domain analysis remains possible.")
 
     if not frame["time_s"].is_monotonic_increasing:
         warnings.add("Time is not monotonically increasing; original row order was preserved.")

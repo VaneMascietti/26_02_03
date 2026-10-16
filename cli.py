@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 from pathlib import Path
 
 import pandas as pd
@@ -17,7 +19,7 @@ from src.txt_parser import read_txt
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Analyze Calisto DSC/uDSC PDF and TXT files.")
+    parser = argparse.ArgumentParser(description="Legacy Calisto analysis. Shared workflow: cli.py explore|analyze|plot --help.")
     parser.add_argument("--pdf", help="Calisto experiment PDF")
     parser.add_argument("--txt", nargs="+", help="TXT file(s) or folders")
     parser.add_argument("--outdir", default="out/dsc_analysis", help="Output directory")
@@ -278,6 +280,11 @@ def analyze(
 
 
 def main() -> None:
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] in {"explore", "analyze", "plot"}:
+        from src.calorimetry_cli import main as common_main
+        common_main(sys.argv[1:])
+        return
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args = build_parser().parse_args()
     if args.plot_saved:

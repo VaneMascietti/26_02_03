@@ -15,6 +15,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 
 from util.lvm_io import load_lvm
 from util.path import get_data_path, get_output_dir
@@ -38,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-max", type=float, default=None, help="Tiempo maximo a mostrar.")
     parser.add_argument(
         "--temperature",
-        choices=["sample", "bath", "furnace", "both"],
+        choices=["sample", "bath", "furnace", "both", "all"],
         default="both",
         help="Temperatura a graficar; both muestra muestra y bano.",
     )
@@ -47,6 +48,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Titulo opcional de la figura.",
     )
+    parser.add_argument("--heat-flow", action="store_true", help="Add a lower heat-flow panel.")
+    parser.add_argument("--time-source", choices=["sample", "device"], default="sample",
+                        help="Use sample-index or recorded device elapsed time consistently.")
+    parser.add_argument("--onset", type=float, action="append", default=[], metavar="TEMP_C",
+                        help="Supplied sample-temperature onset; repeat for multiple onsets.")
+    parser.add_argument("--onset-direction", choices=["cooling", "heating"], default="cooling")
+    parser.add_argument("--onset-time-min", type=float, help="Start of onset search in selected time units.")
+    parser.add_argument("--onset-time-max", type=float, help="End of onset search in selected time units.")
+    parser.add_argument("--font-size", type=float, default=18, help="Axis label and tick size in points.")
+    parser.add_argument("--legend-size", type=float, default=14)
+    parser.add_argument("--line-width", type=float, default=1.7)
+    for signal, style in [("temperature", "-"), ("pressure", "--"), ("heat-flow", "-")]:
+        parser.add_argument(f"--{signal}-style", choices=["-", "--", ":", "-."], default=style)
     return parser
 
 
@@ -81,86 +95,111 @@ def _apply_time_bounds(
     return out
 
 
+def onset_intersections(df, temperatures, direction="cooling", time_min=None, time_max=None):
+    """Interpolate supplied onsets; refuse ambiguous or missing crossings."""
+    records = []
+    for target in temperatures:
+        values = df["T_muestra"].to_numpy(float)
+        if direction == "cooling":
+            crosses = (values[:-1] >= target) & (values[1:] < target)
+        else:
+            crosses = (values[:-1] <= target) & (values[1:] > target)
+        candidates = []
+        for i in np.flatnonzero(crosses):
+            left, right = df.iloc[i], df.iloc[i + 1]
+            fraction = (target - left.T_muestra) / (right.T_muestra - left.T_muestra)
+            record = {key: float(left[key] + fraction * (right[key] - left[key]))
+                      for key in ["plot_time", "T_muestra", "T_horno", "T_banho", "P_muestra", "HF_mW"]
+                      if key in df.columns}
+            if time_min is not None and record["plot_time"] < time_min:
+                continue
+            if time_max is not None and record["plot_time"] > time_max:
+                continue
+            candidates.append(record)
+        if len(candidates) != 1:
+            raise ValueError(f"Onset {target} °C: found {len(candidates)} {direction} crossings; "
+                             "select a unique interval with --onset-time-min/--onset-time-max.")
+        records.append(candidates[0])
+    return records
+
+
 def plot_time_profile(
-    df: pd.DataFrame,
-    outpath: Path,
-    *,
-    data_label: str,
-    unit: str,
-    temperature: str,
-    title: str | None,
+    df: pd.DataFrame, outpath: Path, *, data_label: str, unit: str,
+    temperature: str, title: str | None, heat_flow=False, onsets=(),
+    onset_direction="cooling", onset_time_min=None, onset_time_max=None,
+    font_size=18, legend_size=14, line_width=1.7,
+    temperature_style="-", pressure_style="--", heat_flow_style="-",
 ) -> None:
-    _, xlabel = _time_column(df, unit)
-    fig, pressure_axis = plt.subplots(figsize=(8, 5.2), constrained_layout=True)
-    temperature_axis = pressure_axis.twinx()
-    color = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["black"])[0]
-
-    pressure_axis.plot(
-        df["plot_time"],
-        df["P_muestra"],
-        color=color,
-        marker=".",
-        linestyle="-",
-        ms=1.4,
-        alpha=0.8,
-        label=f"{data_label}: pressure",
-        rasterized=True,
-    )
-
-    if temperature in {"sample", "both"}:
-        temperature_axis.plot(
-            df["plot_time"],
-            df["T_muestra"],
-            color=color,
-            linestyle=":",
-            lw=1.0,
-            alpha=0.6,
-            label=f"{data_label}: sample temperature",
-            rasterized=True,
-        )
-    if temperature in {"bath", "both"} and "T_banho" in df.columns:
-        bath = df.dropna(subset=["T_banho"])
-        temperature_axis.plot(
-            bath["plot_time"],
-            bath["T_banho"],
-            color="#d95f02",
-            linestyle="-",
-            lw=1.0,
-            alpha=0.8,
-            label=f"{data_label}: bath temperature",
-            rasterized=True,
-        )
-    if temperature == "furnace" and "T_horno" in df.columns:
-        furnace = df.dropna(subset=["T_horno"])
-        temperature_axis.plot(
-            furnace["plot_time"],
-            furnace["T_horno"],
-            color="#d95f02",
-            linestyle="-.",
-            lw=1.0,
-            alpha=0.7,
-            label=f"{data_label}: bath temperature",
-            rasterized=True,
-        )
-
-    pressure_axis.set_xlabel(xlabel)
-    pressure_axis.set_ylabel("Sample pressure (bar)")
-    temperature_axis.set_ylabel("Temperature (C)")
-    pressure_axis.grid(True, alpha=0.3)
-    handles, labels = pressure_axis.get_legend_handles_labels()
-    temp_handles, temp_labels = temperature_axis.get_legend_handles_labels()
-    pressure_axis.legend(
-        handles + temp_handles,
-        labels + temp_labels,
-        fontsize=7,
-        ncol=2,
-        loc="best",
-    )
-
-    fig.suptitle(title or "Pressure and temperatures vs time", fontsize=12)
-    outpath.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(outpath, dpi=220)
-    plt.close(fig)
+    selected = {
+        "sample": ["T_muestra"], "bath": ["T_banho"], "furnace": ["T_horno"],
+        "both": ["T_muestra", "T_banho"], "all": ["T_banho", "T_horno", "T_muestra"],
+    }[temperature]
+    for col in selected + (["HF_mW"] if heat_flow else []):
+        if col not in df or not df[col].notna().any():
+            raise ValueError(f"Required signal unavailable: {col}")
+    records = onset_intersections(df, onsets, onset_direction, onset_time_min, onset_time_max)
+    with plt.rc_context({"font.size": font_size}):
+        fig, axes = plt.subplots(2 if heat_flow else 1, 1, figsize=(16, 11 if heat_flow else 7),
+                                 sharex=True, squeeze=False, constrained_layout=True)
+        ax = axes[0, 0]
+        pressure = ax.twinx()
+        pressure.set_zorder(ax.get_zorder() - 1)
+        ax.patch.set_visible(False)
+        names = {"T_banho": "Huber temperature", "T_horno": "Furnace temperature", "T_muestra": "Sample temperature"}
+        colors = {"T_banho": "#16846b", "T_horno": "#dc8430", "T_muestra": "#285ba6"}
+        for col in selected:
+            ax.plot(df.plot_time, df[col], label=names[col], color=colors[col],
+                    lw=line_width, ls=temperature_style)
+        pressure.plot(df.plot_time, df.P_muestra, color="#555555", ls=pressure_style,
+                      lw=line_width, label="Sample pressure")
+        pressure.set_ylabel("Pressure (bar)")
+        ax.set_ylabel("Temperature (°C)")
+        ax.margins(y=.35)
+        pressure.margins(y=.35)
+        if heat_flow:
+            hf = axes[1, 0]
+            hf.plot(df.plot_time, df.HF_mW, color="#554173", lw=line_width,
+                    ls=heat_flow_style, label="Heat flow")
+            hf.set_ylabel("Heat flow (mW)")
+            hf.legend(loc="upper left", fontsize=legend_size, frameon=False)
+        for number, record in enumerate(records, 1):
+            t = record["plot_time"]
+            color = ["#ab3354", "#6550a1"][(number - 1) % 2]
+            for axis in axes[:, 0]:
+                axis.axvline(t, color=color, ls="--", lw=1.4)
+            lines = [f"Onset {number} | {t:.3f} {unit}"]
+            for col, label in [("T_muestra", "Sample"), ("T_horno", "Furnace"), ("T_banho", "Huber")]:
+                if col in record:
+                    lines.append(f"{label}: {record[col]:.2f} °C")
+            lines.append(f"Pressure: {record['P_muestra']:.1f} bar")
+            ax.annotate("\n".join(lines), xy=(t, record["T_muestra"]),
+                        xytext=(.58 + .22 * ((number-1) % 2), .97 - .32 * ((number-1)//2)),
+                        textcoords="axes fraction", va="top", fontsize=legend_size, color=color,
+                        bbox=dict(boxstyle="round,pad=.4", fc="white", ec=color),
+                        arrowprops=dict(arrowstyle="-", color=color))
+            for col in selected:
+                ax.scatter(t, record[col], color=colors[col], edgecolor="white", zorder=5)
+            pressure.scatter(t, record["P_muestra"], color="#555555", edgecolor="white")
+            if heat_flow:
+                hf.scatter(t, record["HF_mW"], color=color, zorder=5)
+                hf.annotate(f"Onset {number}", (t, record["HF_mW"]), xytext=(-8, 18),
+                            textcoords="offset points", ha="right", color=color, fontsize=legend_size)
+        for axis in axes[:, 0]:
+            axis.grid(alpha=.18)
+            axis.tick_params(labelsize=font_size)
+        handles, labels = ax.get_legend_handles_labels()
+        ph, pl = pressure.get_legend_handles_labels()
+        ax.legend(handles + ph, labels + pl, loc="upper left", ncol=1,
+                  frameon=False, fontsize=legend_size)
+        axes[-1, 0].set_xlabel(f"Time ({unit})")
+        ax.set_xlim(df.plot_time.min(), df.plot_time.max())
+        fig.suptitle(title or f"{data_label} — Temperatures and pressure" +
+                     (" with heat flow" if heat_flow else ""), fontsize=font_size + 4)
+        outpath.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(outpath, dpi=220)
+        plt.close(fig)
+    if records:
+        pd.DataFrame(records).to_csv(outpath.with_name(outpath.stem + "_onsets.csv"), index=False)
 
 
 def main() -> int:
@@ -170,6 +209,11 @@ def main() -> int:
         raise FileNotFoundError(f"LVM no encontrado: {data_path}")
 
     df = load_lvm(data_path, program_pdf=None)
+    if args.time_source == "device":
+        df["t_h"] = df["t_s_datetime"] / 3600.0
+        df["t_s"] = df["t_s_datetime"]
+    else:
+        df["t_s"] = df["t_h"] * 3600.0
     clean = _clean_profile(df, args.time_unit)
     clean = _apply_time_bounds(clean, args.time_min, args.time_max)
     if clean.empty:
@@ -188,6 +232,11 @@ def main() -> int:
         unit=args.time_unit,
         temperature=args.temperature,
         title=args.title,
+        heat_flow=args.heat_flow, onsets=args.onset, onset_direction=args.onset_direction,
+        onset_time_min=args.onset_time_min, onset_time_max=args.onset_time_max,
+        font_size=args.font_size, legend_size=args.legend_size, line_width=args.line_width,
+        temperature_style=args.temperature_style, pressure_style=args.pressure_style,
+        heat_flow_style=args.heat_flow_style,
     )
 
     print(

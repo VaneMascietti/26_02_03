@@ -1,0 +1,28 @@
+[
+  {
+    "event_id": "26_08_17:cooling:weak-region",
+    "dataset_id": "26_08_17",
+    "run_id": "26_08_17",
+    "cycle_id": null,
+    "stage_id": "4",
+    "window_s": [115200, 126000],
+    "baseline_s": [118800, 122400],
+    "flank_s": [124020, 125280],
+    "manual_classification": "pending_review",
+    "phase_hypothesis": null,
+    "notes": "Exploratory manual selection around the supplied 25.43 C region. Fit regions require experimental review; supplied temperatures are not forced fit targets."
+  },
+  {
+    "event_id": "26_08_17:cooling:large-region",
+    "dataset_id": "26_08_17",
+    "run_id": "26_08_17",
+    "cycle_id": null,
+    "stage_id": "4",
+    "window_s": [138600, 144720],
+    "baseline_s": [140400, 141840],
+    "flank_s": [142380, 142560],
+    "manual_classification": "pending_review",
+    "phase_hypothesis": null,
+    "notes": "Exploratory initial-flank selection around the supplied 10.41 C region; not a scientifically validated onset."
+  }
+]

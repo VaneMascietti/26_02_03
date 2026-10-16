@@ -52,6 +52,25 @@ python -m pip install -r requirements-dev.txt
 (incluindo pytest). Para instalar apenas as dependências de execução, use
 `requirements.txt`.
 
+## Flujo común de calorimetría (TRIOS, Calisto y Calvet)
+
+`cli.py explore`, `cli.py analyze` y `cli.py plot` separan carga, selección de
+múltiples eventos y gráficos de resultados guardados. `app.py` ofrece las mismas
+acciones en **Common calorimetry**, con ventanas editables y revisión manual.
+Los comandos históricos se conservan; sus métodos no son equivalentes al nuevo.
+
+La [guía completa](docs/common_calorimetry.md) incluye comandos por formato,
+esquema de ventanas, criterios de ruido/oscilación, método geométrico,
+compatibilidad y limitaciones. La [revisión local](docs/common_calorimetry_review.md)
+distingue pruebas sintéticas de observaciones experimentales.
+
+```bash
+.venv/bin/streamlit run app.py
+.venv/bin/python cli.py explore --help
+.venv/bin/python cli.py analyze --help
+.venv/bin/python cli.py plot --help
+```
+
 ## Fluxos principais
 
 ### Análise de experimentos Calvet HP em LVM/PDF
@@ -271,3 +290,30 @@ Não há arquivos `.lvm` ou PDFs de entrada incluídos no repositório.
 ```
 
 O CI executa os testes e uma verificação de sintaxe para Python 3.11 e 3.12.
+
+Para graficar el proceso completo con temperaturas a la izquierda, presión a la
+ derecha y heat flow en un panel inferior con el mismo tiempo:
+
+```bash
+.venv/bin/python plot_time_profile.py \
+  --data data/raw/lvm/26_08_17.lvm \
+  --temperature all --heat-flow --time-source device \
+  --onset 25.43 --onset 10.41 --onset-direction cooling \
+  --font-size 18 --legend-size 14 --line-width 1.7 \
+  --out out/figures/time_profile/26_08_17_full_process.png
+```
+
+Los onsets son temperaturas de muestra suministradas por el usuario, no una
+nueva detección automática. El programa interpola los tiempos y los demás
+señales en cada cruce, y exporta una tabla `_onsets.csv`. Si hay más de un cruce
+en la dirección seleccionada, acote la búsqueda con `--onset-time-min` y
+`--onset-time-max` (en las unidades de `--time-unit`). Estos límites no recortan
+el gráfico; `--time-min` y `--time-max` sí lo recortan. `--time-source device`
+usa el reloj registrado para todas las señales; `sample` conserva el tiempo
+por índice de muestras usado históricamente. No se desplazan las curvas.
+
+Para cambiar los trazos, use `--temperature-style`, `--pressure-style` o
+`--heat-flow-style` con `-`, `--`, `:` o `-.`. Por ejemplo,
+`--pressure-style=-- --heat-flow-style=: --line-width 2.5`.
+La extensión de `--out` selecciona PNG, PDF o SVG. Los textos de la figura están
+en inglés y la leyenda superior se presenta en una columna.

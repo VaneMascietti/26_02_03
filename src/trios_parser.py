@@ -21,6 +21,7 @@ class TriosSegment:
     time_unit: str
     temperature_unit: str
     heat_flow_unit: str
+    declared_units: tuple[str, str, str] | None = None
 
     def summary(self) -> dict[str, Any]:
         frame = self.frame
@@ -113,6 +114,7 @@ def _read_segment(sheet: Any, source: Path) -> TriosSegment | None:
         time_unit=units[0] or "min",
         temperature_unit=units[1] or "°C",
         heat_flow_unit=units[2] or "W/g",
+        declared_units=tuple(units),
     )
 
 
