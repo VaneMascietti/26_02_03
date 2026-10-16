@@ -1,0 +1,20 @@
+{
+  "experiment_id": "E24",
+  "load_id": "E24",
+  "run_id": "26_08_17",
+  "components": ["CO2", "n-C16"],
+  "identity_source": "User confirmed Fig5, then corrected the run to 26_08_17.lvm. Load identifier follows the confirmed E24 grouping.",
+  "loaded_masses": null,
+  "co2_mass_determinations": [],
+  "compositions": [],
+  "effective_volume": null,
+  "system_configuration": null,
+  "program_calvet": "data/26_08_17.pdf",
+  "program_huber": null,
+  "incidents": [],
+  "incident_status": "not documented; an empty list does not assert absence of incidents",
+  "uncertainties": null,
+  "reference_figure": "Fig5.png",
+  "manual_reviews": [],
+  "interpretation": "Fig5 labels LL? and S? are hypotheses pending experimental review."
+}

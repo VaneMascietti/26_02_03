@@ -83,6 +83,12 @@ def command_for_row(
         "--program",
         row["file_program"],
     ]
+    for column in ("experiment_id", "load_id", "run_id"):
+        value = row.get(column, "")
+        if value:
+            cmd.extend(["--" + column.replace("_", "-"), value])
+    if row.get("metadata_json", ""):
+        cmd.extend(["--metadata", row["metadata_json"]])
 
     if select_stage_zones:
         stage_flag = STAGE_ZONE_FLAGS.get(row["stage"].lower())

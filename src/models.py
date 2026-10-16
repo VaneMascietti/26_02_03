@@ -185,11 +185,22 @@ class EventResult:
     baseline_window_c: tuple[float, float] | None = None
     tangent_window_c: tuple[float, float] | None = None
     notes: str = ""
+    phase_hypothesis: str | None = None
+    assignment_confidence: str = "unassigned"
+    onset_time_s: float | None = None
+    peak_time_s: float | None = None
+    method: str = "Calisto legacy tangent"
+    parameters: dict = field(default_factory=dict)
+    requested_window_s: tuple[float, float] | None = None
+    baseline_window_s: tuple[float, float] | None = None
+    flank_window_s: tuple[float, float] | None = None
+    fit_coefficients: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "event_label": self.event_label,
             "status": self.status,
+            "calculation_status": "determined" if self.onset_temp_c is not None else "undetermined",
             "confidence": self.confidence,
             "onset_temp_c": self.onset_temp_c,
             "onset_uncertainty_c": self.onset_uncertainty_c,
@@ -205,5 +216,17 @@ class EventResult:
             "baseline_window_c": self.baseline_window_c,
             "tangent_window_c": self.tangent_window_c,
             "notes": self.notes,
+            "detection_confidence": self.confidence,
+            "phase_hypothesis": self.phase_hypothesis,
+            "assignment_confidence": self.assignment_confidence,
+            "onset_time_s": self.onset_time_s,
+            "peak_time_s": self.peak_time_s,
+            "equilibrium_validated": False,
+            "method": self.method,
+            "parameters": self.parameters,
+            "requested_window_s": self.requested_window_s,
+            "baseline_window_s": self.baseline_window_s,
+            "flank_window_s": self.flank_window_s,
+            "fit_coefficients": self.fit_coefficients,
         }
 

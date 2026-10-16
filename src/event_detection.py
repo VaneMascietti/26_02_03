@@ -13,6 +13,7 @@ from .uncertainty import onset_uncertainty
 
 
 DEFAULT_CONFIG = {
+    "phase_heuristic": False,
     "snr_detected": 3.0,
     "snr_doubtful": 2.0,
     "min_persistence_points": 8,
@@ -148,15 +149,29 @@ def _ll_tangent_onset(
 def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dict | None = None) -> tuple[list[EventResult], NoiseMetrics | None, np.ndarray | None]:
     """Detect up to two candidate events in one segment.
 
-    The labels LL/SL are heuristic suggestions based on temporal order during cooling.
+    The optional LL/SL heuristic is a pending phase hypothesis, independent of detection confidence.
     """
 
     cfg = dict(DEFAULT_CONFIG)
     if config:
         cfg.update(config)
 
+    reason = None
     if len(segment) < 30:
-        return [], None, None
+        reason = "not_enough_points"
+    elif not np.isfinite(segment[["time_s", "temperature_c", "heat_flow_mw"]].to_numpy(float)).all():
+        reason = "missing_required_measurement"
+    else:
+        steps = np.diff(segment.time_s.to_numpy(float))
+        positive = steps[steps > 0]
+        gap = 5 * float(np.median(positive)) if len(positive) else 0
+        if np.any(steps < 0) or (gap and np.any(steps > gap)):
+            reason = "record_interruption; select a continuous interval"
+    if reason:
+        return [EventResult(event_label="candidate", status="undetermined", confidence="not evaluated",
+                            onset_temp_c=None, onset_uncertainty_c=None, ci95_low_c=None, ci95_high_c=None,
+                            peak_temp_c=None, snr=0, integrated_snr=0, automatic_label="undetermined",
+                            notes=reason)], None, None
 
     temperature = segment["temperature_c"].to_numpy(float)
     heat_flow = segment["heat_flow_mw"].to_numpy(float)
@@ -313,4 +328,13 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
         for result in results:
             result.status = "doubtful"
             result.notes = "Overlapping events are not resolved."
+    for number, result in enumerate(results, 1):
+        if cfg["phase_heuristic"] and result.event_label in {"TLL", "TSL"}:
+            result.phase_hypothesis = "candidate " + result.event_label[1:]
+            result.assignment_confidence = "pending manual review"
+            result.notes += " Phase order heuristic enabled; not a validated equilibrium point."
+        else:
+            result.event_label = f"event{number:02d}"
+            result.automatic_label = "calorimetric candidate"
+            result.notes = "Calorimetric candidate; physical interpretation pending manual review."
     return results, metrics, residuals

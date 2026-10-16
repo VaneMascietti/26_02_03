@@ -157,7 +157,7 @@ def plot_co2_phase_with_data(
     df2=None,
     label_data2=None,
     sat_curve=None,
-    title="CO2: P vs T with NIST isochores",
+    title="Experimental P–T with pure CO₂ NIST references",
 ):
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -213,14 +213,14 @@ def plot_co2_phase_with_data(
             iso_df["T"],
             iso_df["P"],
             linewidth=1.5,
-            label=label,
+            label=f"Pure CO₂ reference (NIST): {label}",
         )
     if sat_curve is not None and not sat_curve.empty:
         ax.plot(
             sat_curve["T"],
             sat_curve["P"],
             linewidth=1.5,
-            label="Vapor pressure (NIST)",
+            label="Pure CO₂ vapor pressure reference (NIST)",
         )
 
     # Triple and critical points
@@ -230,7 +230,7 @@ def plot_co2_phase_with_data(
         color="#cc0000",
         s=50,
         zorder=5,
-        label="Triple point (NIST)",
+        label="Pure CO₂ triple point (NIST)",
     )
     crit_t_c = CRIT_T_K - 273.15
     crit_p = CRIT_P_BAR
@@ -240,7 +240,7 @@ def plot_co2_phase_with_data(
         color="#0b2e88",
         s=50,
         zorder=5,
-        label="Critical point (NIST)",
+        label="Pure CO₂ critical point (NIST)",
     )
     # Reference lines from critical point (as in the example figure)
     ax.axvline(crit_t_c, color="#4a4a4a", linewidth=1.0, alpha=0.8)

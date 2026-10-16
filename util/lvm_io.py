@@ -85,7 +85,7 @@ def _uses_pressure_after_heatflow(raw_df: pd.DataFrame) -> bool:
     return counter_like and pressure_like and pressure_has_signal and following_column_not_pressure
 
 
-def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
+def load_lvm(path: Path, program_pdf: Path | None = None, *, time_basis: str = "legacy") -> pd.DataFrame:
     """Load an instrument LVM export using the repository's canonical columns."""
     df = pd.read_csv(path, sep="\t", header=None, engine="python")
     while df.shape[1] >= 1 and _series_is_effectively_blank(df.iloc[:, 0]):
@@ -127,7 +127,10 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
                 "P_muestra_bar" if trailing_sample_pressure else "P_referencia_bar"
             )
     df = df.rename(columns=rename_map)
+    df["source_row"] = np.arange(len(df))
+    rows_before_trim = len(df)
     df = _drop_leading_counter_wrap(df)
+    stale_rows = rows_before_trim - len(df)
 
     df["datetime"] = pd.to_datetime(
         df["datetime"], format="%m/%d/%Y %I:%M:%S %p", errors="coerce"
@@ -139,7 +142,15 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
     initial_datetime = df["datetime"].iloc[0]
     df["t_s"] = (df["datetime"] - initial_datetime).dt.total_seconds()
     sample_time_s = np.arange(len(df), dtype=float) * 0.5
-    df["t_h"] = sample_time_s / 3600.0
+    df["t_original_s"] = df["t_s"]
+    df["t_acquisition_s"] = sample_time_s
+    if time_basis not in {"legacy", "recorded"}:
+        raise ValueError("time_basis must be legacy or recorded")
+    df["t_sync_s"] = df["t_s"] if time_basis == "recorded" else sample_time_s
+    df["t_h"] = df["t_sync_s"] / 3600.0
+    for column in rename_map.values():
+        if column != "datetime" and column in df:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
 
     df["P_muestra"] = df["P_muestra_bar"]
     if "P_referencia_bar" in df.columns:
@@ -147,5 +158,20 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
 
     total_seconds = program_total_seconds(program_pdf) if program_pdf is not None else None
     if total_seconds is not None:
-        df = df.loc[sample_time_s <= total_seconds].copy()
+        df = df.loc[df["t_sync_s"] <= total_seconds].copy()
+    units = {"t_s": "s", "t_h": "h", "t_original_s": "s", "t_sync_s": "s",
+             "t_acquisition_s": "s", "T_muestra": "degC", "T_horno": "degC",
+             "T_banho": "degC", "HF_mW": "mW", "HF_uV": "uV", "V_bomba_ml": "mL"}
+    units.update({c: "bar" for c in df if c.startswith("P_")})
+    df.attrs["units"] = {c: units.get(c, "unspecified") for c in df}
+    df.attrs["provenance"] = {
+        "source": str(path), "layout": "pressure_after_heatflow" if pressure_after_heatflow else
+        ("trailing_sample_pressure" if trailing_sample_pressure else "legacy"),
+        "layout_method": "existing value-range heuristics; instrument confirmation pending",
+        "stale_prefix_rows_removed": stale_rows, "program_crop_s": total_seconds,
+        "time_basis": time_basis, "legacy_cadence_assumed_s": 0.5,
+        "offsets_s": {"all_signals": 0.0}, "reference": "shared timestamp per LVM row",
+        "method": "shared time base; no offset estimated or applied", "interpolation": "none",
+        "thermal_lag_correction": "none", "timestamp_resolution_s": 1,
+    }
     return df

@@ -862,7 +862,7 @@ def select_zone(clean, zone_num, pdf_path: Path, rebase_time=True):
 def plot_panel_6(
     clean,
     outdir: Path,
-    outname="panel_6plots.png",
+    outname="signals_vs_time.png",
     zone_info=None,
     show_zones=True,
     program_pdf: Path | None = None,
@@ -871,253 +871,18 @@ def plot_panel_6(
     onset_window_h=2.0,
     show_onset=False,
 ):
-    outdir.mkdir(parents=True, exist_ok=True)
+    """Legacy name retained for the shared time overview; no event calculation."""
+    from util.calvet_plotting import plot_time_signals
+    outname = outname.replace("panel_6plots", "signals_vs_time")
+    plot_time_signals(clean, Path(outdir) / outname)
+    return None
 
-    if "t_h" in clean:
-        t_h = clean["t_h"].to_numpy()
-    else:
-        t_h = clean["t_s"].to_numpy() / 3600.0
-    turns = detect_ramp_turns(t_h, clean["T_horno"].to_numpy(), min_sep_h=5.0)
-    peak_info = None
-    onset_idx = None
-    onset2_idx = None
-    if show_onset:
-        if onset_method == "tangent":
-            res = compute_onset_tangent(
-                t_h,
-                clean["HF_mW"].to_numpy(),
-                event_polarity="auto",
-            )
-            if res.get("ok") and np.isfinite(res.get("x_onset", np.nan)):
-                peak_info = {
-                    "t_start_h": float(res["x_onset"]),
-                    "hf_start": float(res["y_onset"]),
-                    "t_peak_h": float(res["x_peak"]),
-                    "hf_peak": float(res["y_peak"]),
-                    "t_char_50": float(res.get("t_char_50", np.nan)),
-                    "t_start2_h": float(res.get("x_onset2", np.nan)),
-                    "hf_start2": float(res.get("y_onset2", np.nan)),
-                    "onset2_ok": bool(res.get("onset2_ok", False)),
-                    "method": "tangent",
-                }
-                onset_idx = int(np.abs(t_h - peak_info["t_start_h"]).argmin())
-                if peak_info.get("onset2_ok") and np.isfinite(peak_info.get("t_start2_h", np.nan)):
-                    onset2_idx = int(np.abs(t_h - peak_info["t_start2_h"]).argmin())
-        else:
-            peak_info = detect_peak_start(
-                t_h,
-                clean["HF_mW"].to_numpy(),
-                center_h=onset_center_h,
-                window_h=onset_window_h,
-            )
-            if peak_info is not None:
-                onset_idx = int(np.abs(t_h - peak_info["t_start_h"]).argmin())
-    zone_spans = []
-    iso_spans = []
-    zone_colors = {}
-    if show_zones:
-        if program_pdf is None:
-            program_pdf = Path(DEFAULT_PROGRAM)
-        zone_spans = get_zone_spans(clean, program_pdf)
-        if not zone_spans:
-            iso_spans = detect_isotherm_spans(
-                t_h, clean["T_horno"].to_numpy(), max_rate_c_per_h=1.0, min_duration_h=0.0
-            )
-        zone_colors = {
-            "isoterma": "#d9d9d9",
-            "heating": "#ffcccc",
-            "cooling": "#cce0ff",
-            "return": "#ccf2d9",
-        }
-
-    fig, axes = plt.subplots(3, 2, figsize=(10, 7), constrained_layout=True)
-    if zone_info is not None:
-        fig.suptitle(f"Zona {zone_info['num']} - {zone_info['type']}")
-
-    # 1) P vs t
-    ax = axes[0, 0]
-    ax.plot(t_h, clean["P_muestra"], color="black")
-    if zone_spans:
-        for z in zone_spans:
-            key = z["type"].lower().split()[0]
-            color = zone_colors.get(key, "#eeeeee")
-            ax.axvspan(z["start_h"], z["end_h"], color=color, alpha=0.18, linewidth=0)
-    else:
-        for t0, t1 in iso_spans:
-            ax.axvspan(t0, t1, color="gray", alpha=0.15, linewidth=0)
-    ax.set_xlabel("t (h)")
-    ax.set_ylabel("Presión (Bar)")
-
-    # 2) P vs T
-    ax = axes[0, 1]
-    ax.plot(clean["T_muestra"], clean["P_muestra"], color="black")
-    ax.set_xlabel("T (°C)")
-    ax.set_ylabel("Presión (Bar)")
-
-    # 3) T vs t (T horno en naranja) + líneas verticales naranjas
-    ax = axes[1, 0]
-    ax.plot(t_h, clean["T_muestra"], color="black", label="T muestra")
-    ax.plot(t_h, clean["T_horno"], color="orange", label="T horno")
-    if zone_spans:
-        for z in zone_spans:
-            key = z["type"].lower().split()[0]
-            color = zone_colors.get(key, "#eeeeee")
-            ax.axvspan(z["start_h"], z["end_h"], color=color, alpha=0.18, linewidth=0)
-        # etiquetas de zonas desactivadas a pedido
-    else:
-        for t0, t1 in iso_spans:
-            ax.axvspan(t0, t1, color="gray", alpha=0.15, linewidth=0)
-    ax.set_xlabel("t (h)")
-    ax.set_ylabel("Temperatura (°C)")
-    ax.legend(loc="best", fontsize=8)
-
-    # 4) HF vs T
-    ax = axes[1, 1]
-    ax.plot(clean["T_muestra"], clean["HF_mW"], color="black")
-    ax.axhline(0, linewidth=0.8)
-    if peak_info is not None and onset_idx is not None:
-        t_on = clean["T_muestra"].iloc[onset_idx]
-        hf_on = clean["HF_mW"].iloc[onset_idx]
-        ax.plot(
-            clean["T_muestra"].iloc[onset_idx],
-            clean["HF_mW"].iloc[onset_idx],
-            "bo",
-            markersize=4,
-        )
-        ax.annotate(
-            f"{t_on:.2f} °C",
-            xy=(t_on, hf_on),
-            xytext=(12, 12),
-            textcoords="offset points",
-            fontsize=7,
-            ha="left",
-            va="bottom",
-            color="blue",
-            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
-        )
-    if peak_info is not None and onset2_idx is not None:
-        t_on2 = clean["T_muestra"].iloc[onset2_idx]
-        hf_on2 = clean["HF_mW"].iloc[onset2_idx]
-        ax.plot(
-            clean["T_muestra"].iloc[onset2_idx],
-            clean["HF_mW"].iloc[onset2_idx],
-            "mo",
-            markersize=4,
-        )
-        ax.annotate(
-            f"{t_on2:.2f} °C",
-            xy=(t_on2, hf_on2),
-            xytext=(12, -12),
-            textcoords="offset points",
-            fontsize=7,
-            ha="left",
-            va="top",
-            color="magenta",
-            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
-        )
-    ax.set_xlabel("T (°C)")
-    ax.set_ylabel("HF (mW)")
-
-    # 5) HF vs t (+ líneas verticales)
-    ax = axes[2, 0]
-    ax.plot(t_h, clean["HF_mW"], color="black")
-    ax.axhline(0, linewidth=0.8)
-    if zone_spans:
-        for z in zone_spans:
-            key = z["type"].lower().split()[0]
-            color = zone_colors.get(key, "#eeeeee")
-            ax.axvspan(z["start_h"], z["end_h"], color=color, alpha=0.18, linewidth=0)
-    else:
-        for t0, t1 in iso_spans:
-            ax.axvspan(t0, t1, color="gray", alpha=0.15, linewidth=0)
-    if peak_info is not None:
-        ax.plot(peak_info["t_start_h"], peak_info["hf_start"], "bo", markersize=5, zorder=5)
-        ax.axvline(peak_info["t_start_h"], color="blue", linewidth=0.8, alpha=0.6)
-        if onset2_idx is not None:
-            ax.plot(peak_info["t_start2_h"], peak_info["hf_start2"], "mo", markersize=5, zorder=5)
-            ax.axvline(peak_info["t_start2_h"], color="magenta", linewidth=0.8, alpha=0.6)
-        ax.annotate(
-            f"START\\n{peak_info['t_start_h']:.2f} h\\n{peak_info['hf_start']:.3g} mW",
-            xy=(peak_info["t_start_h"], peak_info["hf_start"]),
-            xytext=(12, 12),
-            textcoords="offset points",
-            fontsize=7,
-            ha="left",
-            va="bottom",
-            color="blue",
-            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
-        )
-        if onset2_idx is not None:
-            ax.annotate(
-                f"ONSET2\\n{peak_info['t_start2_h']:.2f} h\\n{peak_info['hf_start2']:.3g} mW",
-                xy=(peak_info["t_start2_h"], peak_info["hf_start2"]),
-                xytext=(12, 28),
-                textcoords="offset points",
-                fontsize=7,
-                ha="left",
-                va="bottom",
-                color="magenta",
-                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
-            )
-    ax.set_xlabel("t (h)")
-    ax.set_ylabel("HF (mW)")
-
-    # 6) HF vs P
-    ax = axes[2, 1]
-    ax.plot(clean["P_muestra"], clean["HF_mW"], color="black")
-    ax.axhline(0, linewidth=0.8)
-    if peak_info is not None and onset_idx is not None:
-        p_on = clean["P_muestra"].iloc[onset_idx]
-        hf_on = clean["HF_mW"].iloc[onset_idx]
-        ax.plot(
-            clean["P_muestra"].iloc[onset_idx],
-            clean["HF_mW"].iloc[onset_idx],
-            "bo",
-            markersize=4,
-        )
-        ax.annotate(
-            f"{p_on:.2f} bar",
-            xy=(p_on, hf_on),
-            xytext=(12, 12),
-            textcoords="offset points",
-            fontsize=7,
-            ha="left",
-            va="bottom",
-            color="blue",
-            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
-        )
-    if peak_info is not None and onset2_idx is not None:
-        p_on2 = clean["P_muestra"].iloc[onset2_idx]
-        hf_on2 = clean["HF_mW"].iloc[onset2_idx]
-        ax.plot(
-            clean["P_muestra"].iloc[onset2_idx],
-            clean["HF_mW"].iloc[onset2_idx],
-            "mo",
-            markersize=4,
-        )
-        ax.annotate(
-            f"{p_on2:.2f} bar",
-            xy=(p_on2, hf_on2),
-            xytext=(12, -12),
-            textcoords="offset points",
-            fontsize=7,
-            ha="left",
-            va="top",
-            color="magenta",
-            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7),
-        )
-    ax.set_xlabel("P (Bar)")
-    ax.set_ylabel("HF (mW)")
-
-    fig.savefig(outdir / outname, dpi=200)
-    plt.close(fig)
-    return peak_info
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Graficar panel 6 a partir de un .lvm.",
+        description="Graficar presión, temperatura de muestra/Huber y HF frente al tiempo.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--data", type=str, default=DEFAULT_DATA, help="Archivo .lvm a analizar")
@@ -1192,7 +957,7 @@ if __name__ == "__main__":
         if zone_info is None:
             raise SystemExit("Zona no encontrada en el PDF.")
         zone_name = zone_label(zones_all, zone_num) if zones_all else f"Zona {zone_num}"
-        outname = f"{base_name}_panel_6plots_zone{zone_info['num']}.png"
+        outname = f"{base_name}_signals_vs_time_zone{zone_info['num']}.png"
         peak_info = plot_panel_6(
             clean,
             Path("out/figures/analisis"),
@@ -1237,7 +1002,7 @@ if __name__ == "__main__":
                 )
     else:
         show_onset = args.onset_around is not None
-        outname = f"{base_name}_panel_6plots.png"
+        outname = f"{base_name}_signals_vs_time.png"
         peak_info = plot_panel_6(
             clean,
             Path("out/figures/analisis"),

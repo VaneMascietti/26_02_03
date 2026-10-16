@@ -25,14 +25,18 @@ def _pick_delimiter(header: str) -> str:
     return max(candidates, key=header.count)
 
 
-def _to_float(value: object) -> float:
+def _to_float(value: object, decimal_separator: str | None = None) -> float:
     if value is None:
         return np.nan
     text = str(value).strip()
     if text == "":
         return np.nan
-    if "," in text and "." in text:
+    if decimal_separator == ".":
         text = text.replace(",", "")
+    elif decimal_separator == ",":
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text and "." in text:
+        text = text.replace(",", "") if text.rfind(".") > text.rfind(",") else text.replace(".", "").replace(",", ".")
     elif "," in text:
         text = text.replace(",", ".")
     try:
@@ -104,6 +108,20 @@ def _find_column(columns: list[str], variants: list[str]) -> str | None:
     return None
 
 
+def _numeric_values(raw: pd.DataFrame, column: str, warnings: WarningLog) -> pd.Series:
+    """Infer grouping convention from unambiguous mixed-separator values in this column."""
+    values = raw[column].astype(str)
+    mixed = values[values.str.contains(",", regex=False) & values.str.contains(".", regex=False)]
+    decimal = None
+    if len(mixed):
+        conventions = {"." if value.rfind(".") > value.rfind(",") else "," for value in mixed}
+        if len(conventions) != 1:
+            raise ValueError(f"Mixed decimal conventions in {column}; explicit cleanup required")
+        decimal = conventions.pop()
+        warnings.add(f"{column}: inferred decimal '{decimal}' and thousands grouping from mixed-separator values.")
+    return values.map(lambda value: _to_float(value, decimal))
+
+
 def read_txt(path: str | Path) -> DSCData:
     """Read one Calisto TXT file and return canonical columns."""
 
@@ -132,13 +150,38 @@ def read_txt(path: str | Path) -> DSCData:
     if time_scale != 1.0:
         warnings.add(f"{time_col} interpreted as minutes and converted to seconds.")
 
+    heat_unit = re.search(r"\(([^)]+)\)|\[([^]]+)\]", heat_col)
+    unit = (next(v for v in heat_unit.groups() if v) if heat_unit else "").strip().replace("µ", "u").lower()
+    scales = {"mw": 1.0, "uw": .001, "w": 1000.0}
+    if unit and unit not in scales:
+        raise ValueError(f"Unsupported heat flow unit: {heat_col}; no silent conversion to mW")
+    heat_scale = scales.get(unit, 1.0)
+    if not unit:
+        warnings.add("Heat-flow unit unspecified: mW is a legacy assumption requiring confirmation.")
+    if heat_scale != 1:
+        warnings.add(f"{heat_col} converted to mW with factor {heat_scale}.")
+
     frame = pd.DataFrame(
         {
-            "time_s": raw[time_col].map(_to_float) * time_scale,
-            "temperature_c": raw[temperature_col].map(_to_float),
-            "heat_flow_mw": raw[heat_col].map(_to_float),
+            "time_s": _numeric_values(raw, time_col, warnings) * time_scale,
+            "heat_flow_mw": _numeric_values(raw, heat_col, warnings) * heat_scale,
         }
     )
+    frame["time_original"] = frame.time_s / time_scale
+    frame["time_original_s"] = frame.time_s
+    frame["time_sync_s"] = frame.time_s
+    for source_column, target in ((sample_temp_col, "sample_temperature_c"), (furnace_temp_col, "furnace_temperature_c")):
+        if source_column:
+            values = _numeric_values(raw, source_column, warnings)
+            if re.search(r"\(K\)|\[K\]", source_column):
+                values -= 273.15
+                warnings.add(f"{source_column} converted from K to °C.")
+            elif not re.search(r"\((?:°?C|degC)\)|\[(?:°?C|degC)\]|celsius", source_column, flags=re.IGNORECASE):
+                warnings.add(f"Temperature unit requires confirmation: {source_column}; legacy °C assumption.")
+            frame[target] = values
+    frame["temperature_c"] = frame["sample_temperature_c" if sample_temp_col else "furnace_temperature_c"]
+    frame.attrs["units"] = {"time_original": "min" if time_scale == 60 else "s", "time_s": "s", "time_sync_s": "s",
+                            "heat_flow_mw": "mW", "temperature_c": "degC"}
     frame["source_file"] = str(source)
     frame["source_row"] = np.arange(len(frame), dtype=int)
 

@@ -234,6 +234,19 @@ def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Pat
     """Plot a full cooling trace and a separate zoom of the LL region."""
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not any(r.event_label in {"TLL", "TSL"} for r in results):
+        fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
+        ax.plot(segment.temperature_c, segment.heat_flow_mw, color="black", linewidth=1)
+        for result in results:
+            if result.onset_temp_c is not None:
+                ax.axvline(result.onset_temp_c, linestyle="--", label=f"{result.event_label}: calculated onset")
+        ax.set(xlabel="Temperature used (°C; see source in results)", ylabel="Heat flow (mW)",
+               title="Calorimetric candidates · phase assignment pending")
+        if ax.lines and len(ax.lines) > 1:
+            ax.legend()
+        fig.savefig(out_path, dpi=180)
+        plt.close(fig)
+        return out_path
     fig, axes = plt.subplots(
         2,
         1,

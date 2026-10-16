@@ -1,246 +1,172 @@
-# 26_02_03 - Analisis DSC / Calvet
+# Análisis DSC / Calvet
 
-Scripts para analizar ensayos `.lvm` y generar:
-- Panel de 6 graficos por ensayo o por zona (`process_dsc_data.py`)
-- Grafico de fase CO2 `P vs T` con isocoras NIST (`compare_pt_path_nist.py`)
+El flujo principal selecciona **carga → corrida → etapa → eventos** y guarda resultados antes de graficarlos. `26_08_17.lvm` corresponde a E24, CO₂ + n-C16, y `Fig5.png` es la referencia confirmada por el usuario. Los archivos crudos se leen sin modificarlos.
 
-## Dónde Poner Datos
+Calvet es el calorímetro y Calisto es su software. Los flujos de lectura se distinguen por el formato de exportación y las señales disponibles: LVM con programa PDF, o TXT/PDF exportados desde Calisto. Se conservan los métodos y supuestos compatibles con cada formato. TRIOS tiene otro lector.
 
-- Inputs crudos LVM: `data/raw/lvm/`
-- Inputs crudos PDF: `data/raw/pdf/`
-- Compatibilidad legacy: si no existe en `data/raw/...`, el codigo busca en `data/`.
-
-Ejemplos:
-- `data/raw/lvm/26_01_30_teste_oring_nitrilica.lvm`
-- `data/raw/pdf/26_01_30_teste_oring_nitrilica.pdf`
-
-## Requisitos
-
-- Python 3.10+
-- Paquetes: `numpy`, `pandas`, `matplotlib`, `PyPDF2`
-
-Instalacion rapida:
+## Instalación y pruebas
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install numpy pandas matplotlib PyPDF2
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+MPLBACKEND=Agg .venv/bin/python -m pytest -q
 ```
 
-Alternativa usando archivos versionados:
+Los datos se buscan primero en `data/raw/lvm/` y `data/raw/pdf/`, después en `data/`. Los comandos siguientes se ejecutan desde la raíz del proyecto. Se recomienda `.venv/bin/python`.
+
+## Calvet HP: comandos
+
+Cada ejecución crea una carpeta nueva en `out/analysis/calvet/` con huella de configuración y fecha UTC. Allí quedan `signals.csv`, `results.json`, `config.json`, `warnings.txt` y las figuras solicitadas. La configuración incluye SHA-256 de los archivos originales. Las advertencias de metadata incompleta permiten continuar el análisis exploratorio.
+
+### 1. Procesar y revisar sincronización
 
 ```bash
-pip install -r requirements.txt
+MPLBACKEND=Agg .venv/bin/python process_dsc_data.py \
+  --data 26_08_17.lvm --program 26_08_17.pdf \
+  --metadata data/metadata/E24_26_08_17.json
 ```
 
-## Estructura
+La figura predeterminada (`signals.png`) tiene tres paneles alineados sobre el mismo eje de tiempo: presión de muestra, temperatura de muestra junto con Huber cuando esté disponible, y heat flow. La temperatura de horno queda conservada en los datos. El panel de seis gráficos fue retirado. `--output pt` agrega una trayectoria por etapas si se solicita; las otras salidas independientes disponibles son `hf-time` y `hf-temperature`. Las salidas se pueden repetir. `--no-plots` ejecuta solamente el procesamiento y análisis.
 
-- `process_dsc_data.py`: carga `.lvm`, parsea zonas del PDF del programa, genera panel 6 y calcula onset/onset2.
-- `compare_pt_path_nist.py`: superpone trayectoria experimental con curvas NIST (isocoras y saturacion).
-- `data/`: experimentos `.lvm` y programas `.pdf`.
-- `nist/`: tablas NIST locales.
-- `out/figures/`: figuras generadas, agrupadas por flujo (`analisis/`, `phase/`, `process_dsc_data/`, etc.).
-- `out/tables/`: tablas generadas.
-- `out/reports/`: reportes generados.
+La base predeterminada usa las fechas registradas (`--time-basis recorded`). `t_original_s` conserva el tiempo relativo del reloj exportado; `t_sync_s` es el tiempo elegido y `t_h=t_sync_s/3600`. Las señales comparten el tiempo de cada fila: **no se estima ni aplica un desfase**. Las fechas tienen resolución de un segundo y aparecen duplicadas. Para ajustar eventos se conserva la primera fila de cada segundo, con advertencia; `signals.csv` conserva todas las filas seleccionadas.
 
-Todos los resultados generados usan `out/`; la antigua carpeta `output/` ya no se utiliza.
+`--time-basis legacy` reproduce la cadencia histórica supuesta de 0,5 s/fila (`t_acquisition_s`), necesaria para comparaciones con resultados antiguos. El diagnóstico informa diferencias entre ambas bases, repeticiones, retrocesos y saltos. Cambiar la base temporal puede cambiar límites y onsets; no es una corrección del retraso térmico instrumental. No se realiza esa corrección.
 
-## Uso de `process_dsc_data.py`
-
-Comando base:
+### 2. Seleccionar una etapa y corregir límites
 
 ```bash
-.venv/bin/python process_dsc_data.py --data <archivo.lvm> --program <programa.pdf>
+MPLBACKEND=Agg .venv/bin/python process_dsc_data.py \
+  --data 26_08_17.lvm --program 26_08_17.pdf \
+  --metadata data/metadata/E24_26_08_17.json \
+  --Cooling 1 --output pt
 ```
 
-Ejemplo por zona (zona 3):
+También se conservan `--zone 4`, `--Heating N`, `--Isoterma N`, `--Return N`, `--all-cooling` y `--all-heating`. `--stage cooling --cycle 1` selecciona el primer enfriamiento; aquí ciclo significa **ordinal dentro de la dirección seleccionada**, registrado explícitamente. Para seleccionar corridas/cargas se usa el CSV experimental descrito más abajo.
+
+El PDF de E24 llama `Inicio` a la rampa ascendente: se conserva esa etiqueta. `--stage heating --cycle 1` permite seleccionarla por su dirección medida. Se guardan por separado tipo programado, dirección y velocidad medidas sobre `T_muestra`. La velocidad programada permanece pendiente cuando el parser Calvet no la extrae; no se infiere a partir de la medida.
+
+`--time-range 31 35` recorta un intervalo en horas desde el inicio de la corrida, sin cambiar su origen. `--Cooling 1 --stage-limits 22.4 40.8` corrige manualmente los límites de esa etapa, conserva los del PDF y permite incluir datos más allá del fin previsto. La correspondencia entre inicio del programa e inicio del registro requiere revisión experimental.
+
+Por compatibilidad, sin `--full-data` se recorta a la duración total del PDF. `--full-data` conserva todo el registro y no se combina con selección de zonas. `--stage-limits` carga todo el registro antes de seleccionar la etapa corregida.
+
+### 3. Analizar uno o varios eventos, sin figuras
 
 ```bash
-.venv/bin/python process_dsc_data.py \
-  --data 26_01_30_teste_oring_nitrilica.lvm \
-  --program 26_01_30_teste_oring_nitrilica.pdf \
-  --zone 3
+MPLBACKEND=Agg .venv/bin/python process_dsc_data.py \
+  --data 26_08_17.lvm --program 26_08_17.pdf \
+  --metadata data/metadata/E24_26_08_17.json \
+  --Cooling 1 --events data/metadata/E24_events.example.json --no-plots
 ```
 
-Seleccion por perfil de zona:
+El ejemplo analiza dos ventanas independientes de un mismo enfriamiento. Son ventanas exploratorias; requieren revisión. Un evento débil puede quedar `undetermined` con su motivo. No se crea obligatoriamente un evento por etapa.
+
+Para un evento individual se puede usar:
 
 ```bash
-# segundo Cooling del programa
-.venv/bin/python process_dsc_data.py --data <archivo.lvm> --program <programa.pdf> --Cooling 2
+MPLBACKEND=Agg .venv/bin/python process_dsc_data.py \
+  --data 26_08_17.lvm --program 26_08_17.pdf \
+  --metadata data/metadata/E24_26_08_17.json --Cooling 1 \
+  --event-id feature_low --event-window 38.5 40.6 \
+  --baseline-window 38.5 39 --flank-window 39.5 39.65 \
+  --onset-method tangent --no-plots
 ```
 
-Parametros utiles de onset:
+Las ventanas nuevas son absolutas en horas de corrida. `--onset-method simple` conserva el umbral histórico; sus parámetros se pasan mediante `params` en el JSON y no admite ventanas de ajuste de rectas. `--onset-around` y `--onset-window` siguen disponibles: si se selecciona una zona con las opciones antiguas, el centro se interpreta relativo a ella, salvo `--no-rebase`. Ahora esa ventana también limita la búsqueda tangente; antes el panel la ignoraba para tangente.
+
+Cada evento guarda identificadores, señales/unidades, parámetros efectivos, ventanas, coeficientes de ajuste, onset y pico, temperatura y presión simultáneas, advertencias y revisión manual. La presión indica `measured`, `interpolated` o `unavailable`. La interpolación utiliza solamente filas adyacentes válidas, sin extrapolación ni saltos mayores de `--max-gap-s` (5 s por defecto). No se ajusta un evento atravesando interrupciones o selecciones discontinuas.
+
+**`onset2` es una segunda estimación del mismo evento:** intersección de la línea base con la regresión lineal del flanco. `onset` usa la tangente en el punto de mayor pendiente. Se conserva el nombre histórico para comparar resultados; no representa otra transición.
+
+### 4. Graficar resultados guardados sin recalcular
+
+El comando de análisis imprime la ruta exacta de `results.json`. En este ejemplo se elige el último archivo de la corrida:
 
 ```bash
-# metodo de tangente (default)
---onset-method tangent
-
-# metodo simple por umbral
---onset-method simple
-
-# forzar ventana de pico mas cerca del pico (menor valor = mas cerca)
---flank-near-peak-frac 0.10
+RESULTS=$(ls -td out/analysis/calvet/26_08_17_* | head -n 1)/results.json
+MPLBACKEND=Agg .venv/bin/python plot_calvet_results.py "$RESULTS" --plot hf-time --event-id feature_low
+MPLBACKEND=Agg .venv/bin/python plot_calvet_results.py "$RESULTS" --plot hf-temperature --event-id feature_low
+MPLBACKEND=Agg .venv/bin/python plot_calvet_results.py "$RESULTS" --plot pt
 ```
 
-Salida esperada:
-- Imagen: `out/figures/process_dsc_data/<stem>_panel_6plots_zone<Z>.png` (si se usa zona)
-- Consola: valores de onset, onset2, y ventanas usadas:
-  - `base=[t0,t1] h`
-  - `pico=[t0,t1] h`
-
-## Uso por metadata experimental
-
-Para experimentos divididos en varias corridas, usar:
+El renderizador necesita únicamente `results.json` y su `signals.csv`, sin LVM ni PDF. No calcula onsets. Cada nuevo gráfico evita sobrescribir los anteriores. Para comparar dos selecciones guardadas:
 
 ```bash
-.venv/bin/python process_experiments_from_metadata.py --metadata data/metadata/experiments.csv
+.venv/bin/python plot_calvet_results.py ruta1/results.json ruta2/results.json \
+  --plot compare --out out/figures/comparacion_e24.png
 ```
 
-Cada fila de `data/metadata/experiments.csv` representa un archivo `.lvm`. Las columnas minimas son:
+La comparación superpone HF frente a temperatura (`--x T_muestra`) o tiempo (`--x t_h`), con los identificadores de carga/corrida. Elegí resultados de las etapas o ciclos de interés. Si el destino existe, se solicita otra ruta mediante un error explícito.
 
-```csv
-experiment_id,load_id,run_id,date,stage,file_lvm,file_program,notes
-```
-
-`experiment_id` agrupa el experimento completo, `load_id` identifica la misma carga/celda sellada y `run_id` identifica una corrida individual. Asi, dos dias diferentes pueden pertenecer a la misma carga:
-
-```csv
-E08,L08,R01,2026-03-30,heating,26_03_30.lvm,26_03_30.pdf,heating da mesma carga
-E08,L08,R02,2026-03-31,cooling,26_03_31.lvm,26_03_31.pdf,cooling da mesma carga
-```
-
-Ejemplos utiles:
+### 5. Revisar presión, temperaturas y heat flow frente al tiempo
 
 ```bash
-# Ver que comandos se ejecutarian para una carga
+MPLBACKEND=Agg .venv/bin/python plot_calvet_results.py "$RESULTS" --plot signals
+```
+
+Genera presión, temperatura de muestra/Huber y HF frente al tiempo, sin calcular onsets. Huber se omite si no hay una señal con valores válidos. Los accesos antiguos `--diagnostic-panel`, `--output diagnostic`, `--plot diagnostic` y las funciones `plot_panel_6()` de los scripts principales ahora generan esta misma figura de tiempo. No generan el panel de seis.
+
+Los accesos antiguos `--plot-pt`, `--plot-pt-time`, `--data2`, `--label2` siguen disponibles para trayectorias completas y crean su propia carpeta identificada. Para selección por etapa utilizá `--output pt`.
+
+## Metadata y criterio científico
+
+`data/metadata/E24_26_08_17.json` documenta únicamente la identidad y componentes confirmados. Masas, volumen, composición, programa Huber e incertidumbres siguen pendientes. Una lista de incidencias vacía significa que no fueron documentadas.
+
+El JSON admite `loaded_masses`, `co2_mass_determinations` (varios resultados con `method_id`, valor, unidad y fuente) y `compositions` (cada composición con `mass_method_id`, fracciones molares/másicas y componentes). Se conservan ambos métodos de masa si existen; no se calcula una composición automáticamente ni se inventan incertidumbres. Se incluyen configuración del sistema, programas, incidencias y revisiones manuales. Los originales y parámetros quedan vinculados en cada resultado.
+
+La tabla existente sigue funcionando:
+
+```bash
 .venv/bin/python process_experiments_from_metadata.py --load-id L08 --dry-run
-
-# Procesar solo cooling
-.venv/bin/python process_experiments_from_metadata.py --stage cooling
-
-# Para usar automaticamente --all-heating o --all-cooling segun stage
-.venv/bin/python process_experiments_from_metadata.py --load-id L08 --select-stage-zones
-
-# Pasar argumentos extra a process_dsc_data.py
-.venv/bin/python process_experiments_from_metadata.py --load-id L08 -- --onset-method simple
+.venv/bin/python process_experiments_from_metadata.py --load-id L08 --select-stage-zones -- --no-plots
 ```
 
-## Stepwise cooling HF analysis
+Columnas mínimas: `experiment_id,load_id,run_id,date,stage,file_lvm,file_program,notes`. Una fila identifica una corrida; varias corridas pueden pertenecer a la misma carga. La columna opcional `metadata_json` enlaza su documentación ampliada. Los identificadores se transmiten al análisis.
 
-Para enfriamientos escalonados tipo rampa-isoterma-rampa-isoterma en Calvet HP, usar:
+Se distinguen observación, cálculo e interpretación física. La detección de un máximo/mínimo o cambio de pendiente no asigna LL, LV, LLV ni sólido. La confianza de detección es independiente de la asignación de fase. Un onset calorimétrico no valida un equilibrio. Las etiquetas LL?/S? de Fig5 se conservan como hipótesis pendientes. No se calculan entalpías.
+
+## Flujos conservados
+
+### Exportaciones TXT/PDF de Calisto
 
 ```bash
-python analyze_step_hf.py \
-  --data-heating data/raw/lvm/26_05_12.lvm \
-  --program-heating data/raw/pdf/26_05_12.pdf \
-  --data-cooling data/raw/lvm/26_05_13.lvm \
-  --program-cooling data/raw/pdf/26_05_13.pdf \
-  --exclude-transition-window 25 30 \
-  --outdir out/figures/step_hf \
-  --transparent \
+MPLBACKEND=Agg .venv/bin/python cli.py \
+  --pdf data/23_05_12.pdf --txt data/23_05_12.txt \
+  --max-cycles 1 --no-plots --outdir out/dsc_analysis_23_05_12
+```
+
+Guarda segmentos y eventos en `calisto_results.json`, una fila por evento en `events.csv`, más tablas y reporte existentes. Agregá `--cycle N`, `--zone N` o `--direction heating` para seleccionar. `--phase-heuristic` habilita la hipótesis histórica LL/SL según orden; por defecto los eventos son genéricos. La rama de ajuste de dos candidatos a baja temperatura se conserva numéricamente, sin asignar fases por defecto.
+
+```bash
+.venv/bin/python cli.py --render ruta/calisto_results.json
+.venv/bin/streamlit run app.py
+```
+
+La aplicación permite corregir límites de zona (segundos), seleccionar dirección/ciclo, introducir ventanas independientes mediante JSON y guardar una revisión manual independiente. La opción `--events archivo.json` acepta `events` con `stage_id=zoneN`, `event_id`, `interval_s`, `baseline_s` y `flank_s`, todos en segundos desde el inicio de corrida. Usa la convención existente de ajuste robusto en temperatura para cada ventana; no presupone que el método Calvet sea compatible. `--metadata archivo.json` vincula la carga y corrida. La API Python `analyze(..., make_plots=False)` analiza sin figuras. El parser reconoce el agrupamiento de miles en tiempos como `1,001.7` y `1,002`, evitando retrocesos artificiales; esta corrección puede cambiar las asignaciones de zona respecto del lector antiguo. La CLI y la aplicación crean carpetas identificadas; la API rechaza sobrescribir un análisis existente.
+
+El lector conserva temperatura de muestra y horno por separado, prefiere muestra y avisa si utiliza horno. Conserva el tiempo original y convertido, y convierte unidades conocidas de HF a mW; rechaza unidades incompatibles como W/g. El lector de estas exportaciones TXT no incorpora presión: queda explícitamente no disponible. `peak_temp_c` del detector conserva el significado histórico de candidato por gradiente, sin certificar un máximo calorimétrico.
+
+### Calvet escalonado: diagnóstico HF
+
+`analyze_step_hf.py` conserva su carácter diagnóstico. No asigna LL ni integra entalpías. Ejemplo de uso existente:
+
+```bash
+.venv/bin/python analyze_step_hf.py \
+  --data-heating data/raw/lvm/26_05_12.lvm --program-heating data/raw/pdf/26_05_12.pdf \
+  --data-cooling data/raw/lvm/26_05_13.lvm --program-cooling data/raw/pdf/26_05_13.pdf \
+  --exclude-transition-window 25 30 --outdir out/figures/step_hf \
   --diagnostic-note "N2 cylinder closed during experiment"
 ```
 
-Este flujo trata el HF como diagnostico termico/instrumental. No interpreta automaticamente onsets LL, no integra entalpia y no reporta `transition enthalpy`. Genera figuras en `out/figures/step_hf/` y tablas en `out/tables/step_hf/`, incluyendo:
+### Referencias NIST y TRIOS
 
-- `*_zone_summary.csv`
-- `*_isotherm_relaxation.csv`
-- `*_step_hf_processed.csv`
-
-## Uso de `compare_pt_path_nist.py`
-
-Ejecucion con argumentos:
+`compare_pt_path_nist.py` conserva sus opciones `--nist-iso`, `--nist-sat`, `--data2` y `--no-sat`. Sus curvas y puntos NIST se identifican como **referencias de CO₂ puro**, también cuando el experimento es una mezcla. `--show-onset` sigue siendo el punto fijo de referencia legacy, no un onset leído del resultado nuevo.
 
 ```bash
-.venv/bin/python compare_pt_path_nist.py \
-  --data 26_02_07_teste_oring_vitom.lvm \
-  --program 26_02_07_teste_oring_vitom.pdf \
-  --label "Vitom" \
-  --nist-iso nist/nist_iso_D0p70000.txt \
-  --nist-iso nist/nist_iso_D0p80000.txt \
-  --nist-sat nist/co2_nist_sat.csv \
-  --out out/figures/compare_pt_path_nist/co2_phase_overlay.png
+.venv/bin/python trios_cli.py --xls "data/100724_etoh_nc16_0.851w_0.2rate.xls" --outdir out/trios_100724_etoh_nc16
 ```
 
-Opcional:
-- `--show-onset`: muestra punto de onset de referencia en el grafico
-- `--no-sat`: no dibuja curva de saturacion NIST
-- `--data2` y `--label2`: segunda trayectoria experimental
+El flujo TRIOS sigue separado y conserva su lector Excel y onset temporal propios.
 
-Salida esperada:
-- Imagen: `out/figures/compare_pt_path_nist/co2_phase_overlay.png` (o el archivo indicado en `--out`)
+## Alcance y validación
 
-## Notas
-
-- `process_dsc_data.py` soporta dos formatos de `.lvm`:
-  - Historico (9 columnas)
-  - Nuevo (10 columnas, con `P_referencia` en penultima columna)
-- Si la zona no existe en el PDF, el script informa las zonas disponibles.
-- Se recomienda ejecutar siempre con `.venv/bin/python` para evitar problemas de dependencias.
-
-## Testing
-
-Instalar dependencias de desarrollo:
-
-```bash
-pip install -r requirements-dev.txt
-```
-
-Correr tests:
-
-```bash
-pytest -q
-```
-
-## Prototipo local DSC/uDSC Calisto
-
-Este flujo acepta los archivos PDF/TXT de Calisto y analiza las transiciones LL/SL del primer enfriamiento o de los siguientes ciclos detectados.
-
-Instalación y aplicación web:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-Para analizar solamente el primer enfriamiento desde la línea de comandos:
-
-```bash
-.venv/bin/python cli.py \
-  --pdf data/23_05_12.pdf \
-  --txt data/23_05_12.txt \
-  --max-cycles 1 \
-  --outdir out/dsc_analysis_23_05_12
-```
-
-Salidas principales:
-
-- `results_by_cycle.csv`
-- `thermal_program.csv`
-- `zone_assignments.csv`
-- `analysis_config.json`
-- `warnings.txt`
-- `report.html`
-- figuras del ciclo en `figures/`
-
-El parser detecta TXT UTF-16 con delimitador final, convierte automáticamente `Time(min)` a segundos, prefiere `Sample Temperature` cuando existe y avisa cuando utiliza `Furnace Temperature`. El PDF se interpreta por zonas del programa térmico. En cada enfriamiento, el evento de mayor temperatura se etiqueta `TLL` y el de menor temperatura `TSL`; el estado (`detected`/`doubtful`) indica la confianza automática y requiere confirmación experimental cuando sea dudoso.
-
-## Exportaciones DSC de TA Instruments TRIOS
-
-Los archivos Excel binarios `.xls` exportados por TRIOS se procesan con un flujo separado. El lector conserva las unidades originales, identifica las hojas con columnas `Time`, `Temperature` y `Heat Flow`, y selecciona automáticamente las rampas de enfriamiento.
-
-```bash
-.venv/bin/python trios_cli.py \
-  --xls "data/100724_etoh_nc16_0.851w_0.2rate.xls" \
-  --outdir out/trios_100724_etoh_nc16
-```
-
-Las salidas incluyen dos figuras del enfriamiento en `figures/`: una contra temperatura y otra contra tiempo con ejes Y separados para temperatura y heat flow. El primer onset exotérmico se calcula en el dominio del tiempo mediante la intersección entre la línea base previa y la tangente del primer flanco, y se guarda en `trios_onsets.csv`. También se guardan los datos de la rampa en `tables/cooling_01.csv`, el resumen `trios_segments.csv` y la metadata `trios_details.json`.
-
-Chequeo de sintaxis:
-
-```bash
-python -m py_compile process_dsc_data.py compare_pt_path_nist.py util/path.py
-```
+El diagnóstico de responsabilidades, límites de compatibilidad y pendientes está en [docs/refactor_dsc.md](docs/refactor_dsc.md). Se comparan tangente, regresión del flanco y umbral con resultados previos sobre datos reales y se prueban unidades, selección, presión, interrupciones y reproducción guardada. Los archivos instrumentales no se distribuyen en git; las pruebas con archivos reales se omiten cuando faltan esos datos locales. Las pruebas de software no constituyen validación científica.

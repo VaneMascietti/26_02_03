@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from cli import analyze
 from src.event_detection import detect_events
@@ -9,6 +10,7 @@ from src.pdf_parser import parse_program_pdf
 from src.txt_parser import read_txt
 
 
+@pytest.mark.skipif(not Path("data/23_05_12.pdf").is_file(), reason="Requires local Calisto PDF, not distributed in git")
 def test_parse_real_calisto_pdf_zones():
     program = parse_program_pdf("data/23_05_12.pdf")
     assert len(program.zones) >= 44
@@ -19,6 +21,7 @@ def test_parse_real_calisto_pdf_zones():
     assert first_cooling.scan_rate_k_min == 0.3
 
 
+@pytest.mark.skipif(not Path("data/23_05_12.txt").is_file(), reason="Requires local Calisto TXT, not distributed in git")
 def test_read_real_utf16_txt_with_trailing_delimiters():
     data = read_txt("data/23_05_12.txt")
     assert len(data.frame) > 500_000
@@ -53,6 +56,8 @@ def test_synthetic_event_is_detected_without_reference_temperature():
     assert any(result.peak_temp_c is not None and abs(result.peak_temp_c - 15.8) < 0.5 for result in results)
 
 
+@pytest.mark.skipif(not all(Path(f"data/23_05_12.{ext}").is_file() for ext in ("pdf", "txt")),
+                    reason="Requires local Calisto PDF/TXT, not distributed in git")
 def test_cli_end_to_end_one_cycle(tmp_path: Path):
     output = analyze("data/23_05_12.pdf", "data/23_05_12.txt", tmp_path, max_cycles=1)
     results = output["results"]

@@ -1,0 +1,24 @@
+{
+  "notes": "Exploratory windows on absolute run time, selected from the available trace; phase assignment is pending. Adjust after inspecting HF. They are not certified transition windows.",
+  "events": [
+    {
+      "event_id": "feature_high",
+      "stage_id": "zone4",
+      "interval_h": [31.0, 35.0],
+      "method": "tangent",
+      "baseline_h": [31.0, 32.0],
+      "flank_h": [34.0, 34.6],
+      "manual_review": {"status": "pending", "note": "Weak feature; examine independent windows and instrumental contributions."}
+    },
+    {
+      "event_id": "feature_low",
+      "stage_id": "zone4",
+      "interval_h": [38.5, 40.6],
+      "method": "tangent",
+      "polarity": "endo",
+      "baseline_h": [38.5, 39.0],
+      "flank_h": [39.5, 39.65],
+      "manual_review": {"status": "pending", "note": "Computational sign convention only; does not assign a solid phase."}
+    }
+  ]
+}
