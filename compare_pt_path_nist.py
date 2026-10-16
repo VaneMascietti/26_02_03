@@ -112,11 +112,11 @@ def _infer_iso_label(path: Path) -> str:
     stem = path.stem
     m = re.search(r"[Dd](\d+)p(\d+)", stem)
     if m:
-        return f"NIST isochore D={m.group(1)}.{m.group(2)} g/ml"
+        return f"Pure CO2 NIST isochore D={m.group(1)}.{m.group(2)} g/ml"
     m = re.search(r"[Dd]\s*=?\s*([0-9]*\.?[0-9]+)", stem)
     if m:
-        return f"NIST isochore D={m.group(1)} g/ml"
-    return f"NIST isochore {stem}"
+        return f"Pure CO2 NIST isochore D={m.group(1)} g/ml"
+    return f"Pure CO2 NIST isochore {stem}"
 
 
 def load_nist_sat_file(path: Path) -> pd.DataFrame:
@@ -157,7 +157,7 @@ def plot_co2_phase_with_data(
     df2=None,
     label_data2=None,
     sat_curve=None,
-    title="CO2: P vs T with NIST isochores",
+    title="Experimental mixture and pure CO2 reference: P vs T",
 ):
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -220,7 +220,7 @@ def plot_co2_phase_with_data(
             sat_curve["T"],
             sat_curve["P"],
             linewidth=1.5,
-            label="Vapor pressure (NIST)",
+            label="Pure CO2 vapor pressure (NIST)",
         )
 
     # Triple and critical points
@@ -288,9 +288,11 @@ def run_with_config(cfg):
             if i < len(nist_iso_label) and nist_iso_label[i]:
                 label = nist_iso_label[i]
             elif density is not None:
-                label = f"NIST isochore D={density:.5g} g/ml"
+                label = f"Pure CO2 NIST isochore D={density:.5g} g/ml"
             else:
                 label = _infer_iso_label(path)
+            if "pure co2" not in label.lower():
+                label = f"Pure CO2 reference: {label}"
             iso_curves.append((iso_df, label))
 
     sat_curve = None

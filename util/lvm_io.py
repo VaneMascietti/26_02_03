@@ -10,6 +10,65 @@ import pandas as pd
 from .program_zones import program_total_seconds
 
 
+LVM_SIGNAL_UNITS = {
+    "P_bomba_bar": "bar",
+    "P_muestra": "bar",
+    "P_referencia": "bar",
+    "V_bomba_ml": "mL",
+    "T_muestra": "degC",
+    "T_horno": "degC",
+    "T_banho": "degC",
+    "HF_mW": "mW",
+    "HF_uV": "uV",
+    "t_h": "h",
+    "t_s": "s",
+    "t_s_datetime": "s",
+    "t_s_sample_index": "s",
+}
+
+
+def lvm_time_diagnostics(df: pd.DataFrame) -> dict[str, float | int | str]:
+    """Compare device-clock elapsed time with the legacy sample-index time."""
+    required = {"t_s_datetime", "t_s_sample_index"}
+    if not required.issubset(df.columns):
+        return {
+            "status": "not_determined",
+            "reason": "LVM frame does not expose both device-clock and sample-index time.",
+        }
+    clock = pd.to_numeric(df["t_s_datetime"], errors="coerce").to_numpy(float)
+    index_time = pd.to_numeric(df["t_s_sample_index"], errors="coerce").to_numpy(float)
+    valid = np.isfinite(clock) & np.isfinite(index_time)
+    if valid.sum() < 2:
+        return {
+            "status": "not_determined",
+            "reason": "Fewer than two finite timestamps are available.",
+        }
+    clock = clock[valid]
+    index_time = index_time[valid]
+    clock_steps = np.diff(clock)
+    positive_steps = clock_steps[clock_steps > 0]
+    drift = clock - index_time
+    return {
+        "status": "diagnostic_only",
+        "sample_interval_assumption_s": 0.5,
+        "device_clock_median_interval_s": (
+            float(np.median(positive_steps)) if len(positive_steps) else float("nan")
+        ),
+        "device_clock_nonpositive_intervals": int(np.sum(clock_steps <= 0)),
+        "device_clock_gaps_over_5x_median": (
+            int(np.sum(clock_steps > 5.0 * np.median(positive_steps)))
+            if len(positive_steps)
+            else 0
+        ),
+        "device_clock_minus_sample_index_start_s": float(drift[0]),
+        "device_clock_minus_sample_index_end_s": float(drift[-1]),
+        "device_clock_minus_sample_index_min_s": float(np.min(drift)),
+        "device_clock_minus_sample_index_max_s": float(np.max(drift)),
+        "program_time_offset_applied_s": 0.0,
+        "automatic_synchronization_applied": 0,
+    }
+
+
 def _series_is_effectively_blank(series: pd.Series) -> bool:
     normalized = (
         series.fillna("")
@@ -140,6 +199,9 @@ def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
     df["t_s"] = (df["datetime"] - initial_datetime).dt.total_seconds()
     sample_time_s = np.arange(len(df), dtype=float) * 0.5
     df["t_h"] = sample_time_s / 3600.0
+    df["t_s_datetime"] = df["t_s"]
+    df["t_s_sample_index"] = sample_time_s
+    df["t_h_original"] = df["t_h"]
 
     df["P_muestra"] = df["P_muestra_bar"]
     if "P_referencia_bar" in df.columns:

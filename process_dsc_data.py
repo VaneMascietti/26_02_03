@@ -3,11 +3,14 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import pandas as pd
 import argparse
+import json
+from datetime import datetime, timezone
 from util.lvm_io import (
     _drop_leading_counter_wrap,
     _series_is_effectively_blank,
     _uses_trailing_sample_pressure,
     load_lvm,
+    lvm_time_diagnostics,
 )
 from util.path import get_data_path, get_output_dir
 from util.program_zones import (
@@ -23,6 +26,7 @@ from util.program_zones import (
     zone_type_to_english,
 )
 from util.pt_plot import plot_pt_tracks as _plot_pt_tracks
+from util.calvet_analysis import analyze_calvet_events
 
 DEFAULT_DATA = "data/26_01_28_teste_oring_vitom.lvm"
 DEFAULT_PROGRAM = "data/26_01_28_teste_oring_vitom.pdf"
@@ -817,6 +821,8 @@ def plot_panel_6(
     show_onset=False,
     show_reference_pressure=False,
     extra_onset_temps_c=None,
+    precomputed_onset=None,
+    event_windows_h=None,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -830,53 +836,26 @@ def plot_panel_6(
     onset_idx = None
     onset2_idx = None
     extra_onsets = []
-    if show_onset:
-        if onset_method == "tangent":
-            res = compute_onset_tangent(
-                t_h,
-                clean["HF_mW"].to_numpy(),
-                event_polarity="auto",
-                params={
-                    "flank_force_near_peak": True,
-                    "flank_near_peak_frac": float(onset_flank_near_peak_frac),
-                },
-            )
-            if res.get("ok") and np.isfinite(res.get("x_onset", np.nan)):
-                peak_info = {
-                    "t_start_h": float(res["x_onset"]),
-                    "hf_start": float(res["y_onset"]),
-                    "t_peak_h": float(res["x_peak"]),
-                    "hf_peak": float(res["y_peak"]),
-                    "t_char_50": float(res.get("t_char_50", np.nan)),
-                    "t_start2_h": float(res.get("x_onset2", np.nan)),
-                    "hf_start2": float(res.get("y_onset2", np.nan)),
-                    "onset2_ok": bool(res.get("onset2_ok", False)),
-                    "a_base": float(res.get("a_base", np.nan)),
-                    "b_base": float(res.get("b_base", np.nan)),
-                    "a_flank": float(res.get("a_flank", np.nan)),
-                    "b_flank": float(res.get("b_flank", np.nan)),
-                    "baseline_w0_h": float(res.get("baseline_window", (np.nan, np.nan))[0]),
-                    "baseline_w1_h": float(res.get("baseline_window", (np.nan, np.nan))[1]),
-                    "flank_w0_h": float(res.get("flank_window", (np.nan, np.nan))[0]),
-                    "flank_w1_h": float(res.get("flank_window", (np.nan, np.nan))[1]),
-                    "baseline_window_onset_h": tuple(res.get("baseline_window_onset", (np.nan, np.nan))),
-                    "flank_window_onset_h": tuple(res.get("flank_window_onset", (np.nan, np.nan))),
-                    "baseline_window_onset2_h": tuple(res.get("baseline_window_onset2", (np.nan, np.nan))),
-                    "flank_window_onset2_h": tuple(res.get("flank_window_onset2", (np.nan, np.nan))),
-                    "method": "tangent",
-                }
-                onset_idx = int(np.abs(t_h - peak_info["t_start_h"]).argmin())
-                if peak_info.get("onset2_ok") and np.isfinite(peak_info.get("t_start2_h", np.nan)):
-                    onset2_idx = int(np.abs(t_h - peak_info["t_start2_h"]).argmin())
-        else:
-            peak_info = detect_peak_start(
-                t_h,
-                clean["HF_mW"].to_numpy(),
-                center_h=onset_center_h,
-                window_h=onset_window_h,
-            )
-            if peak_info is not None:
-                onset_idx = int(np.abs(t_h - peak_info["t_start_h"]).argmin())
+    if precomputed_onset is not None:
+        peak_info = dict(precomputed_onset)
+    elif show_onset:
+        event_results = analyze_calvet_events(
+            clean,
+            run_id="plot",
+            method=onset_method,
+            tangent_calculator=compute_onset_tangent,
+            threshold_calculator=detect_peak_start,
+            event_windows_h=event_windows_h,
+            center_h=onset_center_h,
+            window_h=onset_window_h,
+            flank_near_peak_frac=onset_flank_near_peak_frac,
+        )
+        if event_results and event_results[0]["status"] == "calculated":
+            peak_info = event_results[0]["legacy_plot_info"]
+    if peak_info is not None and np.isfinite(peak_info.get("t_start_h", np.nan)):
+        onset_idx = int(np.abs(t_h - peak_info["t_start_h"]).argmin())
+        if peak_info.get("onset2_ok") and np.isfinite(peak_info.get("t_start2_h", np.nan)):
+            onset2_idx = int(np.abs(t_h - peak_info["t_start2_h"]).argmin())
     extra_onsets = _extra_onsets_from_temperature_targets(
         clean,
         extra_onset_temps_c,
@@ -1351,6 +1330,96 @@ def print_peak_summary(clean: pd.DataFrame, peak_info: dict, zone_name: str | No
         )
 
 
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
+def save_calvet_event_bundle(
+    clean: pd.DataFrame,
+    events: list[dict],
+    outdir: Path,
+    *,
+    data_path: Path,
+    program_path: Path | None,
+    zone_info: dict | None,
+    method: str,
+) -> Path:
+    """Persist input signals and calculated event results for later plotting."""
+    if outdir.exists() and any(outdir.iterdir()):
+        raise FileExistsError(f"Results directory already contains files: {outdir}")
+    outdir.mkdir(parents=True, exist_ok=True)
+    signal_path = outdir / "signals.csv"
+    result_path = outdir / "results.json"
+    clean.to_csv(signal_path, index=False)
+    payload = {
+        "schema_version": 1,
+        "workflow": "Calvet HP",
+        "source_data": str(data_path),
+        "source_program": str(program_path) if program_path else None,
+        "stage": _json_safe(zone_info),
+        "time_basis": {
+            "analysis_time": "t_h (legacy sample-index time, 0.5 s per sample)",
+            "datetime_elapsed": "t_s_datetime (elapsed device timestamps)",
+            "sample_index_elapsed": "t_s_sample_index (sample index * 0.5 s)",
+            "program_time_offset_applied_s": 0.0,
+            "synchronization_method": "No additional offset applied; stage time is anchored to first retained sample.",
+            "independent_sync_marker": None,
+            "thermal_lag_correction_applied": False,
+        },
+        "time_diagnostics": _json_safe(lvm_time_diagnostics(clean)),
+        "signal_units": {
+            "t_h": "h",
+            "t_s_datetime": "s",
+            "t_s_sample_index": "s",
+            "P_muestra": "bar",
+            "T_muestra": "degC",
+            "T_horno": "degC",
+            "T_banho": "degC",
+            "HF_mW": "mW",
+            "HF_uV": "uV",
+        },
+        "available_signals": [
+            column
+            for column in (
+                "P_muestra",
+                "P_referencia",
+                "T_muestra",
+                "T_horno",
+                "T_banho",
+                "HF_mW",
+                "HF_uV",
+            )
+            if column in clean
+        ],
+        "temperature_roles": {
+            "T_muestra": "measured sample temperature",
+            "T_horno": "measured furnace temperature",
+            "T_banho": "measured bath temperature when present",
+            "program": "programmed zone conditions parsed from the PDF; not a measured temperature",
+        },
+        "analysis_method": method,
+        "signals_file": signal_path.name,
+        "events": _json_safe(events),
+        "interpretation_notice": (
+            "A calculated calorimetric onset is not by itself a validated equilibrium point. "
+            "Phase assignment is left pending manual review."
+        ),
+    }
+    result_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    return result_path
+
+
 def _valid_sample_pressure_mask(clean: pd.DataFrame) -> pd.Series:
     from util.data_filters import numeric_filter_mask
 
@@ -1378,7 +1447,7 @@ def plot_pt_tracks(
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(
-        description="Graficar panel 6 a partir de un .lvm.",
+        description="Process Calvet HP LVM data with a thermal program PDF.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--data", type=str, default=DEFAULT_DATA, help="Archivo .lvm a analizar")
@@ -1407,6 +1476,48 @@ def build_parser() -> argparse.ArgumentParser:
         "--full-data",
         action="store_true",
         help="Graficar el .lvm completo sin recortar por la duracion del PDF del programa.",
+    )
+    parser.add_argument(
+        "--no-panel",
+        action="store_true",
+        help="Compatibilidad: no generar el panel diagnóstico de seis gráficos.",
+    )
+    parser.add_argument(
+        "--diagnostic-panel",
+        action="store_true",
+        help="Generar el panel diagnóstico legado de seis gráficos.",
+    )
+    parser.add_argument(
+        "--analyze-events",
+        action="store_true",
+        help="Calcular y guardar resultados de eventos sin exigir una figura.",
+    )
+    parser.add_argument(
+        "--event-window",
+        nargs=2,
+        type=float,
+        action="append",
+        metavar=("START_H", "END_H"),
+        help=(
+            "Ventana independiente de análisis HF en horas, relativa al inicio "
+            "de la corrida o zona seleccionada; puede repetirse."
+        ),
+    )
+    parser.add_argument(
+        "--stage-window",
+        nargs=2,
+        type=float,
+        metavar=("START_H", "END_H"),
+        help="Corregir manualmente los límites de etapa en tiempo de corrida (h).",
+    )
+    parser.add_argument("--load-id", default=None, help="Identificador de carga para trazabilidad.")
+    parser.add_argument("--run-id", default=None, help="Identificador de corrida; por defecto, el nombre del LVM.")
+    parser.add_argument("--cycle-id", default=None, help="Identificador de ciclo, si fue definido experimentalmente.")
+    parser.add_argument(
+        "--results-out",
+        type=Path,
+        default=None,
+        help="Directorio nuevo para guardar señales y resultados reproducibles (no se sobrescribe).",
     )
     parser.add_argument(
         "--plot-pt",
@@ -1551,9 +1662,67 @@ def handle_pt_plot(args: argparse.Namespace, data_path: Path, program_path: Path
     )
 
 
+def _unused_path(path: Path) -> Path:
+    """Return a non-existing path, preserving older runs by default."""
+    formats = (".png", ".pdf", ".svg")
+    if not any(path.with_suffix(suffix).exists() for suffix in formats):
+        return path
+    suffix = path.suffix
+    index = 2
+    while True:
+        candidate = path.with_name(f"{path.stem}-{index:02d}{suffix}")
+        if not any(candidate.with_suffix(suffix).exists() for suffix in formats):
+            return candidate
+        index += 1
+
+
+def _write_event_bundle(
+    args: argparse.Namespace,
+    clean: pd.DataFrame,
+    events: list[dict],
+    data_path: Path,
+    program_path: Path | None,
+    stage_info: dict | None,
+) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    stage_tag = f"zone{stage_info['num']}" if stage_info else "full"
+    if args.results_out is None:
+        outdir = get_output_dir("tables", "process_dsc_data")
+    else:
+        outdir = args.results_out
+    bundle_dir = outdir / f"{data_path.stem}_{stage_tag}_{timestamp}"
+    result_path = save_calvet_event_bundle(
+        clean,
+        events,
+        bundle_dir,
+        data_path=data_path,
+        program_path=program_path,
+        zone_info=stage_info,
+        method=args.onset_method,
+    )
+    return result_path
+
+
 if __name__ == "__main__":
     parser = build_parser()
     args = parser.parse_args()
+    if args.event_window and args.onset_around is not None:
+        parser.error("--event-window and --onset-around are alternative event selectors.")
+    if args.stage_window:
+        stage_start, stage_end = args.stage_window
+        if not stage_start < stage_end:
+            parser.error("--stage-window START_H must be less than END_H.")
+        if not zone_requested(args):
+            parser.error("--stage-window must be combined with a program zone selector.")
+        if args.all_cooling or args.all_heating:
+            parser.error("--stage-window can only correct one selected program zone.")
+    if args.no_panel and not (
+        args.analyze_events
+        or args.event_window
+        or args.onset_around is not None
+        or zone_requested(args)
+    ):
+        parser.error("--no-panel requires event analysis or an explicit stage selection.")
 
     data_path, program_path = resolve_data_program(args.data, args.program)
 
@@ -1620,6 +1789,74 @@ if __name__ == "__main__":
         requested_zone_nums.extend(zone_nums_by_type(zones_all, "Heating"))
 
     base_name = data_path.stem
+    run_id = args.run_id or data_path.stem
+
+    def analyze_and_save(segment: pd.DataFrame, stage: dict | None) -> tuple[list[dict], dict | None]:
+        if not (
+            zone_requested(args)
+            or args.analyze_events
+            or args.event_window
+            or args.onset_around is not None
+        ):
+            return [], None
+
+        event_windows = args.event_window
+        if event_windows is None and args.onset_around is not None:
+            event_windows = [
+                (args.onset_around - args.onset_window, args.onset_around + args.onset_window)
+            ]
+        events = analyze_calvet_events(
+            segment,
+            run_id=run_id,
+            load_id=args.load_id,
+            cycle_id=args.cycle_id,
+            stage_id=str(stage["num"]) if stage else "full",
+            method=args.onset_method,
+            tangent_calculator=compute_onset_tangent,
+            threshold_calculator=detect_peak_start,
+            event_windows_h=event_windows,
+            center_h=args.onset_around,
+            window_h=args.onset_window,
+            flank_near_peak_frac=args.flank_near_peak_frac,
+        )
+        if stage is not None:
+            temperatures = pd.to_numeric(segment.get("T_muestra"), errors="coerce").dropna()
+            stage["measured_sample_temperature_start_c"] = (
+                float(temperatures.iloc[0]) if not temperatures.empty else None
+            )
+            stage["measured_sample_temperature_end_c"] = (
+                float(temperatures.iloc[-1]) if not temperatures.empty else None
+            )
+            stage["programmed_limits_are_measured_conditions"] = False
+            stage["manual_limits_applied"] = bool(args.stage_window)
+            stage["time_rebased"] = not args.no_rebase
+        result_path = _write_event_bundle(
+            args,
+            segment,
+            events,
+            data_path,
+            program_path,
+            stage,
+        )
+        print(f"Resultados reproducibles guardados: {result_path}")
+        for event in events:
+            if event.get("status") == "calculated":
+                print(
+                    f"{event['event_id']}: onset={event.get('onset_time_h')} h, "
+                    f"T_muestra={event.get('onset_temperature_c')} °C "
+                    f"({event.get('onset_temperature_method')}), "
+                    f"P_muestra={event.get('onset_pressure_bar')} bar "
+                    f"({event.get('onset_pressure_method')})"
+                )
+            else:
+                print(f"{event['event_id']}: not determined: {event.get('reason')}")
+        first_plot_info = (
+            events[0].get("legacy_plot_info")
+            if events and events[0].get("status") == "calculated"
+            else None
+        )
+        return events, first_plot_info
+
     if requested_zone_nums:
         zone_num_set = set(requested_zone_nums)
         zone_nums_ordered = [z["num"] for z in zones_all if z["num"] in zone_num_set]
@@ -1632,45 +1869,73 @@ if __name__ == "__main__":
             )
             if zone_info is None:
                 raise SystemExit(f"Zona {zone_num} no encontrada en el PDF.")
+            if args.stage_window:
+                start_h, end_h = args.stage_window
+                absolute_time = (
+                    clean["t_h_original"] if "t_h_original" in clean else clean["t_h"]
+                )
+                manual_mask = (absolute_time >= start_h) & (absolute_time <= end_h)
+                zone_clean = clean.loc[manual_mask].copy()
+                selected_absolute_time = absolute_time.loc[manual_mask].to_numpy()
+                zone_clean["t_h"] = selected_absolute_time - (0.0 if args.no_rebase else start_h)
+                if "t_s" in zone_clean:
+                    zone_clean["t_s"] = zone_clean["t_h"].to_numpy() * 3600.0
+                zone_info = {
+                    **zone_info,
+                    "start_h": start_h,
+                    "end_h": end_h,
+                    "orig_start_h": start_h,
+                    "orig_end_h": end_h,
+                    "selection_source": "manual time limits",
+                }
+            else:
+                zone_info["selection_source"] = "program PDF"
             zone_name = zone_label(zones_all, zone_num) if zones_all else f"Zona {zone_num}"
+            events, peak_info = analyze_and_save(zone_clean, zone_info)
             outname = f"{base_name}_panel_6plots_zone{zone_info['num']}.png"
-            peak_info = plot_panel_6(
-                zone_clean,
-                get_output_dir("figures", "process_dsc_data"),
-                outname=outname,
-                zone_info=zone_info,
-                show_zones=False,
-                program_pdf=program_path,
-                onset_method=args.onset_method,
-                onset_center_h=args.onset_around,
-                onset_window_h=args.onset_window,
-                onset_flank_near_peak_frac=args.flank_near_peak_frac,
-                show_onset=True,
-                show_reference_pressure=show_reference_pressure,
-                extra_onset_temps_c=args.extra_onset_temp,
-            )
+            if args.diagnostic_panel and not args.no_panel:
+                outpath = _unused_path(get_output_dir("figures", "process_dsc_data") / outname)
+                plot_panel_6(
+                    zone_clean,
+                    outpath.parent,
+                    outname=outpath.name,
+                    zone_info=zone_info,
+                    show_zones=False,
+                    program_pdf=program_path,
+                    onset_method=args.onset_method,
+                    onset_center_h=args.onset_around,
+                    onset_window_h=args.onset_window,
+                    onset_flank_near_peak_frac=args.flank_near_peak_frac,
+                    show_onset=False,
+                    show_reference_pressure=show_reference_pressure,
+                    extra_onset_temps_c=args.extra_onset_temp,
+                    precomputed_onset=peak_info,
+                )
             if peak_info is not None:
                 print_peak_summary(zone_clean, peak_info, zone_name=zone_name)
     else:
-        show_onset = args.onset_around is not None
+        events, peak_info = analyze_and_save(clean, None)
         outname = (
             f"{base_name}_panel_6plots_full.png"
             if args.full_data
             else f"{base_name}_panel_6plots.png"
         )
-        peak_info = plot_panel_6(
-            clean,
-            get_output_dir("figures", "process_dsc_data"),
-            outname=outname,
-            show_zones=not args.full_data,
-            program_pdf=None if args.full_data else program_path,
-            onset_method=args.onset_method,
-            onset_center_h=args.onset_around,
-            onset_window_h=args.onset_window,
-            onset_flank_near_peak_frac=args.flank_near_peak_frac,
-            show_onset=show_onset,
-            show_reference_pressure=show_reference_pressure,
-            extra_onset_temps_c=args.extra_onset_temp,
-        )
-        if show_onset and peak_info is not None:
+        if args.diagnostic_panel and not args.no_panel:
+            outpath = _unused_path(get_output_dir("figures", "process_dsc_data") / outname)
+            plot_panel_6(
+                clean,
+                outpath.parent,
+                outname=outpath.name,
+                show_zones=not args.full_data,
+                program_pdf=None if args.full_data else program_path,
+                onset_method=args.onset_method,
+                onset_center_h=args.onset_around,
+                onset_window_h=args.onset_window,
+                onset_flank_near_peak_frac=args.flank_near_peak_frac,
+                show_onset=False,
+                show_reference_pressure=show_reference_pressure,
+                extra_onset_temps_c=args.extra_onset_temp,
+                precomputed_onset=peak_info,
+            )
+        if (args.onset_around is not None or args.event_window) and peak_info is not None:
             print_peak_summary(clean, peak_info, zone_name=None)

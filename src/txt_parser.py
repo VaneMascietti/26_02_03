@@ -115,6 +115,11 @@ def read_txt(path: str | Path) -> DSCData:
     time_col = _find_column(header, ["time"])
     sample_temp_col = _find_column(header, ["sample temperature", "sampletemperature"])
     furnace_temp_col = _find_column(header, ["furnace temperature", "furnacetemperature"])
+    huber_temp_col = _find_column(header, ["huber temperature", "bath temperature"])
+    setpoint_temp_col = _find_column(
+        header,
+        ["setpoint temperature", "target temperature", "programmed temperature"],
+    )
     heat_col = _find_column(header, ["heatflow", "heat flow"])
 
     if time_col is None or heat_col is None:
@@ -139,6 +144,14 @@ def read_txt(path: str | Path) -> DSCData:
             "heat_flow_mw": raw[heat_col].map(_to_float),
         }
     )
+    for source_column, canonical_name in (
+        (sample_temp_col, "sample_temperature_c"),
+        (furnace_temp_col, "furnace_temperature_c"),
+        (huber_temp_col, "huber_temperature_c"),
+        (setpoint_temp_col, "setpoint_temperature_c"),
+    ):
+        if source_column is not None:
+            frame[canonical_name] = raw[source_column].map(_to_float)
     frame["source_file"] = str(source)
     frame["source_row"] = np.arange(len(frame), dtype=int)
 

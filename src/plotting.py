@@ -231,7 +231,7 @@ def _draw_tll_zoom(
 
 
 def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Path) -> Path:
-    """Plot a full cooling trace and a separate zoom of the LL region."""
+    """Render saved candidate events; no event detection or onset fitting occurs here."""
     out_path = Path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(
@@ -256,14 +256,35 @@ def plot_cycle(segment: pd.DataFrame, results: list[EventResult], out: str | Pat
     full_ax.set_ylabel("Heat flow (mW)")
     full_ax.text(0.015, 0.93, "(a)", transform=full_ax.transAxes, fontsize=16, fontweight="bold")
     full_ax.text(0.03, 0.05, "Exo ↑", transform=full_ax.transAxes, fontsize=14)
-    _add_cooling_arrow(full_ax)
-    _draw_tsl_panel(full_ax, temp, heat_flow, _event(results, "TSL"))
+    if results and results[0].phase_hypothesis:
+        _add_cooling_arrow(full_ax)
+        _draw_tsl_panel(full_ax, temp, heat_flow, _event(results, "TSL"))
+    else:
+        for result in results:
+            onset = _finite_onset(result)
+            if onset is None:
+                continue
+            mask = (temp >= onset - 0.25) & (temp <= onset + 0.25)
+            onset_hf = float(np.nanmedian(heat_flow[mask])) if mask.any() else float(np.nanmedian(heat_flow))
+            full_ax.scatter([onset], [onset_hf], marker="o", facecolor="white", edgecolor=BLUE, zorder=5)
+            full_ax.annotate(
+                f"{result.event_label} (onset {onset:.3f} °C)",
+                xy=(onset, onset_hf),
+                xytext=(8, 8),
+                textcoords="offset points",
+                fontsize=8,
+            )
 
     tll = _event(results, "TLL")
     region = _ll_region(temp, tll) if tll is not None else None
     if region is None:
         zoom_ax.set_axis_off()
-        zoom_ax.text(0.5, 0.5, "TLL no detectado automáticamente", transform=zoom_ax.transAxes, ha="center", va="center")
+        note = (
+            "Hipótesis TLL pendiente de revisión"
+            if tll is not None
+            else "Sin asignación de fase: revisar eventos candidatos"
+        )
+        zoom_ax.text(0.5, 0.5, note, transform=zoom_ax.transAxes, ha="center", va="center")
     else:
         low, high = region
         compact_ll_limits = (

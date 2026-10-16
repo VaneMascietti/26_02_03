@@ -8,11 +8,20 @@ from process_dsc_data import (
     _extra_onsets_from_temperature_targets,
     _resolve_input_path,
     _uses_trailing_sample_pressure,
+    build_parser,
     compute_onset_tangent,
     detect_zones_from_temperature,
     load_lvm,
     load_program_zones,
 )
+
+
+def test_diagnostic_panel_is_opt_in_and_legacy_suppression_flag_remains_available():
+    parser = build_parser()
+
+    assert parser.parse_args([]).diagnostic_panel is False
+    assert parser.parse_args(["--diagnostic-panel"]).diagnostic_panel is True
+    assert parser.parse_args(["--no-panel"]).no_panel is True
 
 
 def test_dedupe_repeated_suffix():
@@ -149,6 +158,9 @@ def test_load_lvm_ignores_blank_leading_column_with_nul_footer(tmp_path):
     assert np.allclose(df["P_muestra"].to_numpy(), [307.3, 307.2])
     assert np.allclose(df["T_muestra"].to_numpy(), [19.914864, 19.914770])
     assert np.allclose(df["HF_mW"].to_numpy(), [178.607569, 177.973052])
+    assert np.allclose(df["t_h_original"].to_numpy(), [0.0, 0.5 / 3600])
+    assert np.allclose(df["t_s_datetime"].to_numpy(), [0.0, 1.0])
+    assert np.allclose(df["t_s_sample_index"].to_numpy(), [0.0, 0.5])
 
 
 def test_load_lvm_detects_trailing_sample_pressure_layout(tmp_path):

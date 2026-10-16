@@ -65,6 +65,8 @@ def test_command_for_row_keeps_stage_zone_selection_explicit():
     row = pd.Series(
         {
             "stage": "heating",
+            "load_id": "L08",
+            "run_id": "R01",
             "file_lvm": "26_03_30.lvm",
             "file_program": "26_03_30.pdf",
         }
@@ -86,6 +88,12 @@ def test_command_for_row_keeps_stage_zone_selection_explicit():
         "26_03_30.lvm",
         "--program",
         "26_03_30.pdf",
+        "--load-id",
+        "L08",
+        "--run-id",
+        "R01",
+        "--no-panel",
+        "--analyze-events",
     ]
     assert with_zones == [
         "python",
@@ -94,7 +102,13 @@ def test_command_for_row_keeps_stage_zone_selection_explicit():
         "26_03_30.lvm",
         "--program",
         "26_03_30.pdf",
+        "--load-id",
+        "L08",
+        "--run-id",
+        "R01",
         "--all-heating",
+        "--no-panel",
+        "--analyze-events",
         "--onset-method",
         "simple",
     ]

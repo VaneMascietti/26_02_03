@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     "low_temperature_ll_baseline_low_delta_c": 0.86,
     "low_temperature_ll_baseline_high_delta_c": 1.36,
     "low_temperature_sl_tangent_half_window": 36,
+    "phase_label_heuristic": False,
 }
 
 
@@ -148,7 +149,8 @@ def _ll_tangent_onset(
 def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dict | None = None) -> tuple[list[EventResult], NoiseMetrics | None, np.ndarray | None]:
     """Detect up to two candidate events in one segment.
 
-    The labels LL/SL are heuristic suggestions based on temporal order during cooling.
+    Detection is independent of phase assignment. Optional phase labels are
+    heuristic hypotheses and must be reviewed manually.
     """
 
     cfg = dict(DEFAULT_CONFIG)
@@ -200,7 +202,8 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
         ], metrics, residuals
 
     low_temperature_pair = (
-        direction == "cooling"
+        bool(cfg["phase_label_heuristic"])
+        and direction == "cooling"
         and float(np.nanmax(temperature)) <= float(cfg["low_temperature_pair_max_c"])
     )
     if low_temperature_pair:
@@ -213,16 +216,13 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
     else:
         selected = sorted(scored[:2], key=lambda item: item[1])
     selected_indices = [item[1] for item in selected]
-    labels = ["event"] * len(selected_indices)
-    if direction == "cooling" and selected_indices:
+    if bool(cfg["phase_label_heuristic"]) and direction == "cooling":
         if len(selected_indices) == 1:
             labels = ["TSL"]
         else:
-            # During cooling, the higher-temperature candidate is LL and the
-            # lower-temperature candidate is SL, even when the transitions are
-            # far apart.  The confidence/status fields still communicate when
-            # the higher-temperature feature is only a doubtful candidate.
             labels = ["TLL", "TSL", *["event"] * max(0, len(selected_indices) - 2)]
+    else:
+        labels = [f"event-{index:02d}" for index in range(1, len(selected_indices) + 1)]
 
     results: list[EventResult] = []
     for i, idx in enumerate(selected_indices):
@@ -262,9 +262,25 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
                 snr=local_metrics.snr,
                 integrated_snr=local_metrics.integrated_snr,
                 automatic_label=labels[i] if i < len(labels) else "event",
+                phase_hypothesis=(
+                    labels[i]
+                    if bool(cfg["phase_label_heuristic"])
+                    and labels[i] in {"TLL", "TSL"}
+                    else None
+                ),
+                phase_assignment_status=(
+                    "hypothesis_pending_review"
+                    if bool(cfg["phase_label_heuristic"])
+                    and labels[i] in {"TLL", "TSL"}
+                    else "pending_manual_review"
+                ),
                 baseline_window_c=base_window,
                 tangent_window_c=tangent_window,
-                notes="Automatic label is a heuristic suggestion; manual confirmation is required.",
+                notes=(
+                    "Heuristic phase hypothesis; manual confirmation is required."
+                    if bool(cfg["phase_label_heuristic"])
+                    else "Detected heat-flow feature; phase assignment is pending manual review."
+                ),
             )
         )
 
@@ -296,6 +312,8 @@ def detect_events(segment: pd.DataFrame, direction: str = "cooling", config: dic
                 snr=selected[0][2].snr,
                 integrated_snr=selected[0][2].integrated_snr,
                 automatic_label="TLL",
+                phase_hypothesis="TLL",
+                phase_assignment_status="hypothesis_pending_review",
                 baseline_window_c=baseline_window,
                 tangent_window_c=tangent_window,
                 notes=(

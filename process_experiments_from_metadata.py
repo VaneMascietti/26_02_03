@@ -73,6 +73,7 @@ def command_for_row(
     python_executable: str,
     process_script: Path = PROCESS_SCRIPT,
     select_stage_zones: bool = False,
+    diagnostic_panel: bool = False,
     extra_args: list[str] | None = None,
 ) -> list[str]:
     cmd = [
@@ -82,12 +83,18 @@ def command_for_row(
         row["file_lvm"],
         "--program",
         row["file_program"],
+        "--load-id",
+        row["load_id"],
+        "--run-id",
+        row["run_id"],
     ]
 
     if select_stage_zones:
         stage_flag = STAGE_ZONE_FLAGS.get(row["stage"].lower())
         if stage_flag:
             cmd.append(stage_flag)
+    if not diagnostic_panel:
+        cmd.extend(["--no-panel", "--analyze-events"])
 
     if extra_args:
         cmd.extend(extra_args)
@@ -100,6 +107,7 @@ def run_commands(
     python_executable: str,
     process_script: Path,
     select_stage_zones: bool,
+    diagnostic_panel: bool,
     extra_args: list[str],
     dry_run: bool,
     keep_going: bool,
@@ -116,6 +124,7 @@ def run_commands(
             python_executable=python_executable,
             process_script=process_script,
             select_stage_zones=select_stage_zones,
+            diagnostic_panel=diagnostic_panel,
             extra_args=extra_args,
         )
         print(f"\n==> {label}")
@@ -152,6 +161,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Para stage=heating usa --all-heating y para stage=cooling usa "
             "--all-cooling al llamar a process_dsc_data.py."
         ),
+    )
+    parser.add_argument(
+        "--diagnostic-panel",
+        action="store_true",
+        help="Generate the legacy six-plot diagnostic panel for every selected run.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Mostrar comandos sin ejecutarlos.")
     parser.add_argument(
@@ -198,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         python_executable=args.python_executable,
         process_script=args.process_script,
         select_stage_zones=args.select_stage_zones,
+        diagnostic_panel=args.diagnostic_panel,
         extra_args=extra_args,
         dry_run=args.dry_run,
         keep_going=args.keep_going,

@@ -112,6 +112,10 @@ class ZoneAssignment:
     end_row: int | None
     status: str
     warning: str | None = None
+    selected_start_s: float | None = None
+    selected_end_s: float | None = None
+    selection_source: str = "program"
+    source_rows: list[int] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +129,10 @@ class ZoneAssignment:
             "file": str(self.file),
             "start_row": self.start_row,
             "end_row": self.end_row,
+            "selected_start_s": self.selected_start_s,
+            "selected_end_s": self.selected_end_s,
+            "selection_source": self.selection_source,
+            "selected_row_count": len(self.source_rows) if self.source_rows is not None else None,
             "status": self.status,
             "warning": self.warning,
         }
@@ -180,6 +188,8 @@ class EventResult:
     integrated_snr: float
     automatic_label: str
     manual_label: str | None = None
+    phase_hypothesis: str | None = None
+    phase_assignment_status: str = "pending_manual_review"
     manual_onset_temp_c: float | None = None
     calisto_onset_temp_c: float | None = None
     baseline_window_c: tuple[float, float] | None = None
@@ -200,10 +210,13 @@ class EventResult:
             "integrated_snr": self.integrated_snr,
             "automatic_label": self.automatic_label,
             "manual_label": self.manual_label,
+            "phase_hypothesis": self.phase_hypothesis,
+            "phase_assignment_status": self.phase_assignment_status,
+            "detection_confidence": self.confidence,
+            "phase_assignment_confidence": "not_assessed",
             "manual_onset_temp_c": self.manual_onset_temp_c,
             "calisto_onset_temp_c": self.calisto_onset_temp_c,
             "baseline_window_c": self.baseline_window_c,
             "tangent_window_c": self.tangent_window_c,
             "notes": self.notes,
         }
-
