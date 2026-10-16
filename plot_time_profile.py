@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Titulo opcional de la figura.",
     )
     parser.add_argument("--heat-flow", action="store_true", help="Add a lower heat-flow panel.")
+    parser.add_argument("--pt-panel", action="store_true", help="Add a pressure versus sample-temperature panel.")
+    parser.add_argument("--phase-label", action="append", default=[], help="User-supplied P-T label per onset, in --onset order; repeat as needed.")
     parser.add_argument("--time-source", choices=["sample", "device"], default="sample",
                         help="Use sample-index or recorded device elapsed time consistently.")
     parser.add_argument("--onset", type=float, action="append", default=[], metavar="TEMP_C",
@@ -129,6 +131,7 @@ def plot_time_profile(
     onset_direction="cooling", onset_time_min=None, onset_time_max=None,
     font_size=18, legend_size=14, line_width=1.7,
     temperature_style="-", pressure_style="--", heat_flow_style="-",
+    pt_panel=False, phase_labels=(),
 ) -> None:
     selected = {
         "sample": ["T_muestra"], "bath": ["T_banho"], "furnace": ["T_horno"],
@@ -138,9 +141,17 @@ def plot_time_profile(
         if col not in df or not df[col].notna().any():
             raise ValueError(f"Required signal unavailable: {col}")
     records = onset_intersections(df, onsets, onset_direction, onset_time_min, onset_time_max)
+    if phase_labels and len(phase_labels) != len(records):
+        raise ValueError("Supply one --phase-label per --onset.")
     with plt.rc_context({"font.size": font_size}):
-        fig, axes = plt.subplots(2 if heat_flow else 1, 1, figsize=(16, 11 if heat_flow else 7),
-                                 sharex=True, squeeze=False, constrained_layout=True)
+        time_panels = 2 if heat_flow else 1
+        panel_count = time_panels + int(pt_panel)
+        fig, axes = plt.subplots(panel_count, 1, figsize=(16, 16 if panel_count == 3 else 11 if panel_count == 2 else 7),
+                                 sharex=False, squeeze=False, constrained_layout=True)
+        time_axes = axes[:time_panels, 0]
+        if heat_flow:
+            axes[1, 0].sharex(axes[0, 0])
+            axes[0, 0].tick_params(labelbottom=False)
         ax = axes[0, 0]
         pressure = ax.twinx()
         pressure.set_zorder(ax.get_zorder() - 1)
@@ -165,25 +176,24 @@ def plot_time_profile(
         for number, record in enumerate(records, 1):
             t = record["plot_time"]
             color = ["#ab3354", "#6550a1"][(number - 1) % 2]
-            for axis in axes[:, 0]:
+            for axis in time_axes:
                 axis.axvline(t, color=color, ls="--", lw=1.4)
             lines = [f"Onset {number} | {t:.3f} {unit}"]
             for col, label in [("T_muestra", "Sample"), ("T_horno", "Furnace"), ("T_banho", "Huber")]:
                 if col in record:
                     lines.append(f"{label}: {record[col]:.2f} °C")
             lines.append(f"Pressure: {record['P_muestra']:.1f} bar")
-            ax.annotate("\n".join(lines), xy=(t, record["T_muestra"]),
-                        xytext=(.58 + .22 * ((number-1) % 2), .97 - .32 * ((number-1)//2)),
-                        textcoords="axes fraction", va="top", fontsize=legend_size, color=color,
-                        bbox=dict(boxstyle="round,pad=.4", fc="white", ec=color),
-                        arrowprops=dict(arrowstyle="-", color=color))
-            for col in selected:
-                ax.scatter(t, record[col], color=colors[col], edgecolor="white", zorder=5)
-            pressure.scatter(t, record["P_muestra"], color="#555555", edgecolor="white")
+            ax.annotate("\n".join(lines),
+                    xy=(t, .04 if number % 2 else .97),
+                    xycoords=ax.get_xaxis_transform(),
+                    xytext=(-10, 0), textcoords="offset points",
+                    ha="right", va="bottom" if number % 2 else "top",
+                    fontsize=legend_size, color=color,
+                    bbox=dict(boxstyle="round,pad=.4", fc="white", ec=color))
             if heat_flow:
-                hf.scatter(t, record["HF_mW"], color=color, zorder=5)
-                hf.annotate(f"Onset {number}", (t, record["HF_mW"]), xytext=(-8, 18),
-                            textcoords="offset points", ha="right", color=color, fontsize=legend_size)
+                hf.text(t, .25, f"Onset {number}",
+                        transform=hf.get_xaxis_transform(), ha="right", va="top",
+                        color=color, fontsize=legend_size)
         for axis in axes[:, 0]:
             axis.grid(alpha=.18)
             axis.tick_params(labelsize=font_size)
@@ -191,7 +201,38 @@ def plot_time_profile(
         ph, pl = pressure.get_legend_handles_labels()
         ax.legend(handles + ph, labels + pl, loc="upper left", ncol=1,
                   frameon=False, fontsize=legend_size)
-        axes[-1, 0].set_xlabel(f"Time ({unit})")
+        time_axes[-1].set_xlabel(f"Time ({unit})")
+        if pt_panel:
+            pt = axes[-1, 0]
+            # Classify sustained measured T changes over a five-minute window.
+            # This colors the measured path, without assigning phase identity.
+            time_s = df.plot_time * {"h": 3600., "min": 60., "s": 1.}[unit]
+            positive_steps = time_s.diff().loc[lambda values: values > 0]
+            half = max(1, int(round(150. / positive_steps.median()))) if len(positive_steps) else 1
+            smooth = df.T_muestra.rolling(2 * half + 1, center=True, min_periods=1).median()
+            rate = (smooth.shift(-half) - smooth.shift(half)) / (time_s.shift(-half) - time_s.shift(half)) * 3600.
+            rate = rate.bfill().ffill().fillna(0.)
+            for mask, label, color in [
+                (rate > .3, "Heating path", "#dc8430"),
+                (rate < -.3, "Cooling path", "#285ba6"),
+                (rate.abs() <= .3, "Isothermal", "#888888"),
+            ]:
+                pt.plot(df.T_muestra.where(mask), df.P_muestra.where(mask),
+                        color=color, lw=line_width, label=label)
+            for number, record in enumerate(records, 1):
+                color = ["#ab3354", "#6550a1"][(number - 1) % 2]
+                label = phase_labels[number - 1] if phase_labels else f"Onset {number}"
+                pt.scatter(record["T_muestra"], record["P_muestra"], s=65,
+                           color=color, edgecolor="white", zorder=5)
+                pt.annotate(label,
+                            xy=(record["T_muestra"], record["P_muestra"]),
+                            xytext=(18, 24 if number % 2 else -48), textcoords="offset points",
+                            fontsize=legend_size, color=color,
+                            arrowprops=dict(arrowstyle="-", color=color),
+                            bbox=dict(boxstyle="round,pad=.3", fc="white", ec=color))
+            pt.set_xlabel("Sample temperature (°C)")
+            pt.set_ylabel("Pressure (bar)")
+            pt.legend(loc="upper left", fontsize=legend_size, frameon=False)
         ax.set_xlim(df.plot_time.min(), df.plot_time.max())
         fig.suptitle(title or f"{data_label} — Temperatures and pressure" +
                      (" with heat flow" if heat_flow else ""), fontsize=font_size + 4)
@@ -237,6 +278,7 @@ def main() -> int:
         font_size=args.font_size, legend_size=args.legend_size, line_width=args.line_width,
         temperature_style=args.temperature_style, pressure_style=args.pressure_style,
         heat_flow_style=args.heat_flow_style,
+        pt_panel=args.pt_panel, phase_labels=args.phase_label,
     )
 
     print(
