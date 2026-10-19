@@ -160,7 +160,7 @@ def render_saved_results(
         ax.set_ylabel("HF (mW)")
 
     if mode in {"hf-time", "hf-temperature"}:
-        for event in events:
+        for number, event in enumerate(events, 1):
             if mode == "hf-time":
                 onset_x = {
                     "selected": event.get("onset_time_h"),
@@ -173,9 +173,9 @@ def render_saved_results(
                 }[time_axis]
             else:
                 onset_x = event.get("onset_temperature_c")
-            if onset_x is None or event.get("onset_hf_mw") is None:
+            if onset_x is None:
                 continue
-            ax.scatter([onset_x], [event["onset_hf_mw"]], label=f"{event['event_id']} onset")
+            ax.axvline(onset_x, ls="--", label=f"Onset {number}")
         if events:
             ax.legend(loc="best", fontsize=8)
         ax.grid(True, alpha=0.3)

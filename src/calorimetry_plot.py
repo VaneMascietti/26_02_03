@@ -85,7 +85,7 @@ def render_bundle(bundle, out, *, dataset_id=None, event_id=None, color='#554173
         hf.plot(t / 3600, _broken(t, f.heat_flow, f.get('source_discontinuity')), color=color, lw=line_width, ls=line_style, label='Original heat flow')
         hf.set_ylabel(f"Heat flow ({item.units['heat_flow']})")
         hf.set_xlabel('Time (h)')
-        for e in events:
+        for number, e in enumerate(events, 1):
             fit = e.get('fit')
             if fit:
                 for key, label, c in [('baseline', 'Baseline', '#16846b'), ('flank', 'Initial flank', '#dc8430')]:
@@ -107,13 +107,10 @@ def render_bundle(bundle, out, *, dataset_id=None, event_id=None, color='#554173
                 x = onset['time_s'] / 3600
                 for axis in [ax, hf]:
                     axis.axvline(x, color='#ab3354', ls='--', lw=1.4)
-                hf.scatter(x, onset['heat_flow'], color='#ab3354', zorder=5)
-                text = f"{e['event_id']} | {onset['time_s']:.2f} s"
-                if onset['temperature_c']['value'] is not None:
-                    text += f"\nT: {onset['temperature_c']['value']:.2f} {item.units.get('temperature_c', '°C')}"
-                if onset['pressure']['value'] is not None:
-                    text += f"\nP: {onset['pressure']['value']:.2f} {item.units['pressure']}"
-                hf.annotate(text, (x, onset['heat_flow']), xytext=(5, 20), textcoords='offset points', fontsize=legend_size)
+                for axis in [ax, hf]:
+                    axis.text(x, .96 - .09 * ((number - 1) % 2), f'Onset {number}',
+                              transform=axis.get_xaxis_transform(), ha='right', va='top',
+                              color='#ab3354', fontsize=legend_size)
             elif event_id:
                 hf.text(.02, .97, f"Not determined: {e.get('reason')}", transform=hf.transAxes,
                         va='top', fontsize=legend_size, wrap=True)
