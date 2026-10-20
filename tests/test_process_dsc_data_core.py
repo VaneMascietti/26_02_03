@@ -249,3 +249,15 @@ def test_extra_onsets_from_temperature_targets_maps_to_nearest_points():
     assert extras[1]["idx"] == 2
     assert abs(extras[0]["target_T_C"] - 40.64) < 1e-9
     assert abs(extras[1]["target_T_C"] - 10.98) < 1e-9
+
+
+def test_explicit_lvm_layout_preserves_channels_when_pressure_acquisition_fails(tmp_path):
+    path = tmp_path/'failed_pressure.lvm'
+    path.write_text('\n'.join(
+        f'\t0\t0\t{1000+i}\t{80-i}\t{79-i}\t5.1\t188.3\t{p}\t58.4\t10/7/2026 11:50:{40+i:02d} AM'
+        for i,p in enumerate([353.2,0,0,0,0]))+'\n')
+    frame = load_lvm(path,layout='pressure-after-heatflow')
+    assert frame.P_muestra.tolist() == [353.2,0,0,0,0]
+    assert frame.T_muestra.tolist() == [80,79,78,77,76]
+    assert frame.HF_mW.tolist() == [5.1]*5
+    assert frame.T_banho.tolist() == [58.4]*5

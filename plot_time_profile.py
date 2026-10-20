@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import hashlib
 import os
 from pathlib import Path
 
@@ -18,6 +20,8 @@ import pandas as pd
 import numpy as np
 
 from util.lvm_io import load_lvm
+from util.plot_layout import scale_heat_flow, place_inside_legend
+from util.literature_plot import load_literature, plot_literature
 from util.path import get_data_path, get_output_dir
 
 
@@ -27,6 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--data", required=True, help="Archivo .lvm a graficar.")
+    parser.add_argument("--pressure-reconstruction", type=Path, help="Explicit reference-cycle pressure reconstruction recipe; raw data are unchanged.")
+    parser.add_argument("--lvm-layout", default="auto", choices=["auto", "standard", "pressure-after-heatflow", "trailing-sample-pressure"], help="Explicit instrument layout when automatic detection is ambiguous.")
     parser.add_argument("--out", default=None, help="Ruta de salida PNG.")
     parser.add_argument("--label", default=None, help="Etiqueta para la leyenda.")
     parser.add_argument(
@@ -49,7 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Titulo opcional de la figura.",
     )
     parser.add_argument("--heat-flow", action="store_true", help="Add a lower heat-flow panel.")
+    parser.add_argument("--panel-labels", action="store_true", help="Label panels (a), (b), (c).")
     parser.add_argument("--pt-panel", action="store_true", help="Add a pressure versus sample-temperature panel.")
+    parser.add_argument("--literature", type=Path, help="Curated CSV or extracted Excel literature workbook to overlay on --pt-panel.")
+    parser.add_argument("--literature-system", help="System declaration for Excel input; exact system filter for CSV input.")
+    parser.add_argument("--literature-ids", nargs="+", help="Literature IDs to retain.")
+    parser.add_argument("--literature-transitions", nargs="+", help="Original transition types to retain (e.g. TLL SL LLV).")
+    parser.add_argument("--literature-xco2", nargs="+", type=float, help="Compositions to retain, tolerance 0.00005.")
+    parser.add_argument("--pt-ylim", nargs=2, type=float, metavar=("MIN", "MAX"), help="Pressure limits for the P-T panel, in bar.")
     parser.add_argument("--phase-label", action="append", default=[], help="User-supplied P-T label per onset, in --onset order; repeat as needed.")
     parser.add_argument("--time-source", choices=["sample", "device"], default="sample",
                         help="Use sample-index or recorded device elapsed time consistently.")
@@ -59,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--onset-time-min", type=float, help="Start of onset search in selected time units.")
     parser.add_argument("--onset-time-max", type=float, help="End of onset search in selected time units.")
     parser.add_argument("--font-size", type=float, default=18, help="Axis label and tick size in points.")
+    parser.add_argument("--hf-ylim", nargs=2, type=float, metavar=("MIN", "MAX"), help="Minimum HF display range in mW; always expanded to retain all data.")
+    parser.add_argument("--hf-scale", choices=["auto", "linear", "symlog"], default="auto", help="Full-range HF display transform; auto compresses isolated extremes without cropping.")
     parser.add_argument("--legend-size", type=float, default=14)
     parser.add_argument("--line-width", type=float, default=1.7)
     for signal, style in [("temperature", "-"), ("pressure", "--"), ("heat-flow", "-")]:
@@ -117,6 +132,8 @@ def onset_intersections(df, temperatures, direction="cooling", time_min=None, ti
                 continue
             if time_max is not None and record["plot_time"] > time_max:
                 continue
+            if "pressure_reconstructed" in df:
+                record["pressure_origin"] = "reconstructed" if bool(left.pressure_reconstructed) or bool(right.pressure_reconstructed) else "measured"
             candidates.append(record)
         if len(candidates) != 1:
             raise ValueError(f"Onset {target} °C: found {len(candidates)} {direction} crossings; "
@@ -131,8 +148,10 @@ def plot_time_profile(
     onset_direction="cooling", onset_time_min=None, onset_time_max=None,
     font_size=18, legend_size=14, line_width=1.7,
     temperature_style="-", pressure_style="--", heat_flow_style="-",
-    pt_panel=False, phase_labels=(),
+    pt_panel=False, phase_labels=(), literature=None, pt_ylim=None, panel_labels=False, hf_ylim=None, hf_scale="auto",
 ) -> None:
+    if literature is not None and not pt_panel:
+        raise ValueError("Literature overlay requires --pt-panel.")
     selected = {
         "sample": ["T_muestra"], "bath": ["T_banho"], "furnace": ["T_horno"],
         "both": ["T_muestra", "T_banho"], "all": ["T_banho", "T_horno", "T_muestra"],
@@ -161,8 +180,15 @@ def plot_time_profile(
         for col in selected:
             ax.plot(df.plot_time, df[col], label=names[col], color=colors[col],
                     lw=line_width, ls=temperature_style)
-        pressure.plot(df.plot_time, df.P_muestra, color="#555555", ls=pressure_style,
-                      lw=line_width, label="Sample pressure")
+        reconstructed = df.get("pressure_reconstructed", pd.Series(False, index=df.index)).astype(bool)
+        if reconstructed.any():
+            pressure.plot(df.plot_time, df.P_muestra.where(~reconstructed), color="#555555", ls="-",
+                          lw=line_width, label="Measured sample pressure")
+            pressure.plot(df.plot_time, df.P_muestra.where(reconstructed), color="#555555", ls="--",
+                          lw=line_width, label="Reconstructed pressure (estimate)")
+        else:
+            pressure.plot(df.plot_time, df.P_muestra, color="#555555", ls=pressure_style,
+                          lw=line_width, label="Sample pressure")
         pressure.set_ylabel("Pressure (bar)")
         ax.set_ylabel("Temperature (°C)")
         ax.margins(y=.35)
@@ -171,8 +197,7 @@ def plot_time_profile(
             hf = axes[1, 0]
             hf.plot(df.plot_time, df.HF_mW, color="#554173", lw=line_width,
                     ls=heat_flow_style, label="Heat flow")
-            hf.set_ylabel("Heat flow (mW)")
-            hf.legend(loc="upper left", fontsize=legend_size, frameon=False)
+            scale_heat_flow(hf, df.HF_mW, scale=hf_scale, limits=hf_ylim)
         for number, record in enumerate(records, 1):
             t = record["plot_time"]
             color = ["#ab3354", "#6550a1"][(number - 1) % 2]
@@ -182,7 +207,8 @@ def plot_time_profile(
             for col, label in [("T_muestra", "Sample"), ("T_horno", "Furnace"), ("T_banho", "Huber")]:
                 if col in record:
                     lines.append(f"{label}: {record[col]:.2f} °C")
-            lines.append(f"Pressure: {record['P_muestra']:.1f} bar")
+            pressure_label = "Pressure (est.)" if record.get("pressure_origin") == "reconstructed" else "Pressure"
+            lines.append(f"{pressure_label}: {record['P_muestra']:.1f} bar")
             ax.annotate("\n".join(lines),
                     xy=(t, .04 if number % 2 else .97),
                     xycoords=ax.get_xaxis_transform(),
@@ -199,8 +225,6 @@ def plot_time_profile(
             axis.tick_params(labelsize=font_size)
         handles, labels = ax.get_legend_handles_labels()
         ph, pl = pressure.get_legend_handles_labels()
-        ax.legend(handles + ph, labels + pl, loc="upper left", ncol=1,
-                  frameon=False, fontsize=legend_size)
         time_axes[-1].set_xlabel(f"Time ({unit})")
         if pt_panel:
             pt = axes[-1, 0]
@@ -217,8 +241,11 @@ def plot_time_profile(
                 (rate < -.3, "Cooling path", "#285ba6"),
                 (rate.abs() <= .3, "Isothermal", "#888888"),
             ]:
-                pt.plot(df.T_muestra.where(mask), df.P_muestra.where(mask),
+                pt.plot(df.T_muestra.where(mask & ~reconstructed), df.P_muestra.where(mask & ~reconstructed),
                         color=color, lw=line_width, label=label)
+                if (mask & reconstructed).any():
+                    pt.plot(df.T_muestra.where(mask & reconstructed), df.P_muestra.where(mask & reconstructed),
+                            color=color, lw=line_width, ls="--", label=f"{label} — reconstructed pressure")
             for number, record in enumerate(records, 1):
                 color = ["#ab3354", "#6550a1"][(number - 1) % 2]
                 label = phase_labels[number - 1] if phase_labels else f"Onset {number}"
@@ -230,15 +257,35 @@ def plot_time_profile(
                             fontsize=legend_size, color=color,
                             arrowprops=dict(arrowstyle="-", color=color),
                             bbox=dict(boxstyle="round,pad=.3", fc="white", ec=color))
+            if literature is not None:
+                plot_literature(pt, literature)
             pt.set_xlabel("Sample temperature (°C)")
             pt.set_ylabel("Pressure (bar)")
-            pt.legend(loc="upper left", fontsize=legend_size, frameon=False)
+            if pt_ylim is not None:
+                pt.set_ylim(*pt_ylim)
+            literature_title = None
+            if literature is not None:
+                systems = ", ".join(literature["Sistema"].dropna().unique()) if "Sistema" in literature else "unspecified"
+                literature_title = f"Literature: {systems}"
         ax.set_xlim(df.plot_time.min(), df.plot_time.max())
+        if panel_labels:
+            for letter, axis in zip("abcdefghijklmnopqrstuvwxyz", axes[:, 0]):
+                axis.annotate(f"({letter})", xy=(0., 1.), xycoords="axes fraction",
+                              xytext=(0, 8), textcoords="offset points",
+                              ha="left", va="bottom", fontsize=font_size, fontweight="bold")
         fig.suptitle(title or f"{data_label} — Temperatures and pressure" +
                      (" with heat flow" if heat_flow else ""), fontsize=font_size + 4)
         outpath.parent.mkdir(parents=True, exist_ok=True)
+        place_inside_legend(ax, handles=handles+ph, labels=labels+pl,
+                            other_axes=[pressure], fontsize=legend_size, locations=[2])
+        if heat_flow:
+            place_inside_legend(hf, fontsize=legend_size)
+        if pt_panel:
+            place_inside_legend(pt, fontsize=legend_size, title=literature_title)
         fig.savefig(outpath, dpi=220)
         plt.close(fig)
+    if literature is not None:
+        literature.to_csv(outpath.with_name(outpath.stem + "_literature.csv"), index=False)
     if records:
         pd.DataFrame(records).to_csv(outpath.with_name(outpath.stem + "_onsets.csv"), index=False)
 
@@ -249,7 +296,25 @@ def main() -> int:
     if not data_path.is_file():
         raise FileNotFoundError(f"LVM no encontrado: {data_path}")
 
-    df = load_lvm(data_path, program_pdf=None)
+    if args.literature and not args.pt_panel:
+        raise SystemExit("--literature requires --pt-panel.")
+    if not args.literature and any([args.literature_ids, args.literature_transitions, args.literature_xco2, args.literature_system]):
+        raise SystemExit("Literature filters require --literature CSV.")
+    literature = load_literature(args.literature, ids=args.literature_ids,
+                                 transitions=args.literature_transitions,
+                                 compositions=args.literature_xco2, system=args.literature_system) if args.literature else None
+    reconstruction_metadata = None
+    if args.pressure_reconstruction:
+        from util.pressure_reconstruction import reconstruct_pressure
+        recipe = json.loads(args.pressure_reconstruction.read_text())
+        if args.lvm_layout != "auto" and args.lvm_layout != recipe["layout"]:
+            raise SystemExit("--lvm-layout conflicts with the reconstruction recipe.")
+        df = load_lvm(data_path, program_pdf=None, layout=recipe["layout"])
+        df, reconstruction_metadata = reconstruct_pressure(df, recipe)
+        reconstruction_metadata["source_file"] = str(data_path.resolve())
+        reconstruction_metadata["source_sha256"] = hashlib.sha256(data_path.read_bytes()).hexdigest()
+    else:
+        df = load_lvm(data_path, program_pdf=None, layout=args.lvm_layout)
     if args.time_source == "device":
         df["t_h"] = df["t_s_datetime"] / 3600.0
         df["t_s"] = df["t_s_datetime"]
@@ -278,9 +343,14 @@ def main() -> int:
         font_size=args.font_size, legend_size=args.legend_size, line_width=args.line_width,
         temperature_style=args.temperature_style, pressure_style=args.pressure_style,
         heat_flow_style=args.heat_flow_style,
-        pt_panel=args.pt_panel, phase_labels=args.phase_label,
+        pt_panel=args.pt_panel, phase_labels=args.phase_label, literature=literature, pt_ylim=args.pt_ylim, panel_labels=args.panel_labels, hf_ylim=args.hf_ylim, hf_scale=args.hf_scale,
     )
 
+    if reconstruction_metadata is not None:
+        outpath.with_name(outpath.stem + "_pressure_reconstruction.json").write_text(
+            json.dumps(reconstruction_metadata, indent=2, ensure_ascii=False))
+        df[["datetime", "T_muestra", "P_muestra_recorded", "P_muestra", "pressure_origin"]].to_csv(
+            outpath.with_name(outpath.stem + "_pressure_provenance.csv"), index=False)
     print(
         f"{data_path.stem}: points={len(clean)}, "
         f"t=[{clean['plot_time'].min():.3f},{clean['plot_time'].max():.3f}] {args.time_unit}, "

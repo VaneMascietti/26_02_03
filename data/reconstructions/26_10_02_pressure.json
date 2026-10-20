@@ -1,0 +1,15 @@
+{
+  "layout": "pressure-after-heatflow",
+  "raw_pressure_column_zero_based": 8,
+  "reference_start": "2026-10-04 04:35:19",
+  "reference_end": "2026-10-05 15:21:46",
+  "last_measured_time": "2026-10-07 11:50:41",
+  "offset_at_cut_bar": -9.99,
+  "zero_offset_temperature_C": 10.0,
+  "max_reference_temperature_gap_C": 0.1,
+  "missing_value": 0.0,
+  "expected_rows": 180719,
+  "source_note": "data/raw/lvm/README_reconstruccion.md",
+  "reference_selection_note": "First cooling: measured maximum-temperature plateau to first-cycle sample-temperature minimum. Bounds recreated from available source; exact historical reconstruction file unavailable.",
+  "composition": {"system":"CO2+n-pentadecane", "CO2_mass_g":2.3107, "nC15_mass_g":1.6593, "w_CO2":0.5820, "x_CO2":0.8705}
+}

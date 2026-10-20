@@ -317,3 +317,117 @@ Para cambiar los trazos, use `--temperature-style`, `--pressure-style` o
 `--pressure-style=-- --heat-flow-style=: --line-width 2.5`.
 La extensión de `--out` selecciona PNG, PDF o SVG. Los textos de la figura están
 en inglés y la leyenda superior se presenta en una columna.
+
+Para superponer literatura en el tercer panel P–T del perfil temporal, añadir:
+
+```bash
+--pt-panel --literature data/phase_transitions/literature_points.csv
+```
+
+La opción se incorpora a `plot_time_profile.py`; no requiere otro programa.
+`--literature-ids`, `--literature-transitions` y `--literature-xco2` permiten
+seleccionar series. Por ejemplo, `--literature-ids Braga2022_x0.9231
+Braga2022_x0.9537 Braga2022_x0.9789` conserva solo Braga. Las transiciones se
+muestran con los nombres originales (TLL, SL, SLL, LLV, LV), sin reasignar fases.
+Las composiciones y el sistema se identifican en la leyenda. Los puntos no se
+unen entre sí. Se guarda además `<nombre>_literature.csv` con los puntos usados,
+referencias, DOI y demás columnas de procedencia del CSV original.
+
+**CO₂ + n-pentadecano (n-C15):** el archivo anterior
+`data/phase_transitions/literature_points.csv` corresponde a n-hexadecano
+(n-C16) y no debe usarse como literatura del mismo sistema para n-C15.
+Para superponer únicamente LLV de n-C15 en el panel P–T:
+
+```bash
+.venv/bin/python plot_time_profile.py \
+  --data data/raw/lvm/26_09_29.lvm \
+  --temperature all --heat-flow --time-source device --pt-panel \
+  --literature data/literature/CO2_nC15_literature_data_extracted.xlsx \
+  --literature-system CO2+n-pentadecane \
+  --literature-transitions LLV \
+  --title "26_09_29 — CO₂ + n-C15" \
+  --out out/figures/time_profile/26_09_29_full_process_pt_literature_nC15.png
+```
+
+El adaptador Excel reutiliza la superposición existente. Conserva hoja, fila,
+hash del archivo, referencias, DOI y composiciones de cada fase. `L1-L2-V` se
+normaliza a `LLV`; los extremos UCEP y punto cuádruple conservan clases separadas.
+Las tablas sin identificación de fase explícita quedan como `unclassified` y
+no entran en el filtro LLV. No se convierten composiciones de fase en composición
+global. El sistema se declara explícitamente mediante `--literature-system`.
+El libro contiene 30 filas LLV: 15 de Secuianu 2010, 7 de Hottovy 1981 y 8 de
+van der Steen 1989. Esto usa la extracción aportada, sin afirmar que se haya
+verificado nuevamente su transcripción contra todos los artículos originales.
+
+### `26_10_02`: presión interrumpida y reconstrucción documentada
+
+Antes de analizar este ensayo, leer `data/raw/lvm/README_reconstruccion.md`.
+Los dos archivos `data/raw/lvm/26_10_02.lvm` y
+`data/raw/pdf/26_10_02.lvm` disponibles son copias idénticas del registro con
+ceros; el segundo **no es un PDF**. No se dispone del programa térmico PDF ni
+del archivo de reconstrucción histórico mencionado en esa nota.
+
+El registro pierde presión después de `2026-10-07 11:50:41`, a 80.834648 °C y
+353.2 bar. T y HF continúan. Los 180719 ceros posteriores no son presión física.
+Estos ceros también impiden identificar automáticamente este formato: para
+leerlo sin reconstrucción usar `--lvm-layout pressure-after-heatflow`.
+
+La receta `data/reconstructions/26_10_02_pressure.json` reproduce el método
+escrito en la nota: interpolación lineal de P(T) del primer enfriamiento más
+−9.99 bar en el corte, reducidos linealmente a cero a 10 °C. Las temperaturas
+repetidas del tramo de referencia se agrupan por la mediana de presión. Se
+registran explícitamente las fechas de referencia, el criterio para elegirlas y
+la composición aportada (x_CO2=0.8705). No se ajusta ninguna regresión, no se
+extrapolan temperaturas y no se modifican datos brutos. La elección exacta de
+ventanas del archivo histórico no está disponible: esto es una recreación
+trazable del método, no una afirmación de identidad con aquel archivo.
+
+Para graficar el proceso completo con presión estimada diferenciada:
+
+```bash
+.venv/bin/python plot_time_profile.py \
+  --data data/raw/lvm/26_10_02.lvm \
+  --pressure-reconstruction data/reconstructions/26_10_02_pressure.json \
+  --temperature all --heat-flow --time-source device --pt-panel --panel-labels \
+  --literature data/literature/CO2_nC15_literature_data_extracted.xlsx \
+  --literature-system CO2+n-pentadecane --literature-transitions LLV \
+  --title "26_10_02 — CO₂ + n-C15" \
+  --out out/figures/time_profile/26_10_02_full_process_pt_literature_nC15.png
+```
+
+El programa selecciona el layout explícito de la receta, conserva P registrada
+y origen por fila, y dibuja la reconstrucción con línea discontinua en tiempo
+y en P–T. Exporta `_pressure_provenance.csv` y
+`_pressure_reconstruction.json`. Un onset dentro del tramo reconstruido guarda
+`pressure_origin=reconstructed`; su recuadro dice `Pressure (est.)`.
+
+Para generar además una copia LVM derivada y conservar intactas las demás
+columnas y líneas del archivo:
+
+```bash
+.venv/bin/python -m util.pressure_reconstruction \
+  --data data/raw/lvm/26_10_02.lvm \
+  --recipe data/reconstructions/26_10_02_pressure.json \
+  --outdir out/reconstructions/26_10_02_documented_method
+```
+
+Elegir otro directorio si ya existe. La salida guarda el LVM derivado, tabla de
+procedencia y metadatos con hashes SHA256. No establece incertidumbre calibrada
+ni valida repetibilidad entre ciclos: la presión del segundo enfriamiento se
+construye a partir del primero y por tanto no es una comparación independiente.
+
+El perfil temporal coloca las leyendas **dentro** de los paneles. Evalúa varias
+posiciones y, cuando hace falta, distribuciones de columnas; considera las
+curvas del eje gemelo de presión y los recuadros de anotación. Si no encuentra
+espacio libre, reserva margen superior. La lógica de presentación está en
+`util/plot_layout.py`, separada del cálculo y de la reconstrucción.
+
+El HF muestra **todos los valores finitos**, sin recorte por cuantiles ni nota
+`Outside scale`. `--hf-scale auto` (predeterminado) mantiene escala lineal salvo
+que el rango completo supere tres veces el rango central 0.5–99.5%; en ese caso
+usa escala logarítmica simétrica, identificada en el eje. Cerca de cero es
+lineal; los extremos se comprimen sin cambiar los datos. Esto solo cambia la
+presentación y no sirve para medir pendientes geométricas de onset en pantalla.
+`--hf-scale linear` fuerza una escala lineal que también incluye todos los
+valores. `--hf-ylim MIN MAX` ahora define un rango mínimo: se amplía si hace
+falta para conservar todos los puntos.

@@ -34,6 +34,83 @@ def test_time_profile_writes_sample_and_bath_temperature_plot(tmp_path: Path):
     assert outpath.stat().st_size > 0
 
 
+def test_heat_flow_requested_limits_expand_to_preserve_every_point(tmp_path, monkeypatch):
+    import matplotlib.figure
+
+    frame = pd.DataFrame(
+        {
+            "plot_time": [0.0, 1.0, 2.0, 3.0],
+            "T_muestra": [20.0, 30.0, 25.0, 40.0],
+            "P_muestra": [100.0, 200.0, 150.0, 300.0],
+            "HF_mW": [-11.0, -2.0, 6.0, 78.0],
+        }
+    )
+    figures = []
+    monkeypatch.setattr(
+        matplotlib.figure.Figure,
+        "savefig",
+        lambda fig, *args, **kwargs: figures.append(fig),
+    )
+
+    plot_time_profile(
+        frame,
+        tmp_path / "profile.png",
+        data_label="test",
+        unit="h",
+        temperature="sample",
+        title=None,
+        heat_flow=True,
+        hf_ylim=(-12.0, 12.0),
+    )
+
+    heat_flow_axis = next(
+        axis for axis in figures[0].axes if axis.get_ylabel().startswith("Heat flow (mW)")
+    )
+    low, high = heat_flow_axis.get_ylim()
+    assert low <= -12 and high >= 78
+    assert not any("Outside scale" in text.get_text() for text in heat_flow_axis.texts)
+
+
+def test_heat_flow_autoscale_is_robust_to_isolated_extrema(tmp_path, monkeypatch):
+    import matplotlib.figure
+    import numpy as np
+
+    hf = np.append(np.linspace(-5.0, 5.0, 1000), 78.5)
+    frame = pd.DataFrame(
+        {
+            "plot_time": np.arange(len(hf), dtype=float),
+            "T_muestra": np.linspace(20.0, 40.0, len(hf)),
+            "P_muestra": np.linspace(100.0, 300.0, len(hf)),
+            "HF_mW": hf,
+        }
+    )
+    figures = []
+    monkeypatch.setattr(
+        matplotlib.figure.Figure,
+        "savefig",
+        lambda fig, *args, **kwargs: figures.append(fig),
+    )
+
+    plot_time_profile(
+        frame,
+        tmp_path / "profile.png",
+        data_label="test",
+        unit="h",
+        temperature="sample",
+        title=None,
+        heat_flow=True,
+    )
+
+    heat_flow_axis = next(
+        axis for axis in figures[0].axes if axis.get_ylabel().startswith("Heat flow (mW)")
+    )
+    low, high = heat_flow_axis.get_ylim()
+    assert low < -5.0 and high > 78.5
+    assert heat_flow_axis.get_yscale() == "symlog"
+    np.testing.assert_array_equal(heat_flow_axis.lines[0].get_ydata(), hf)
+    assert not any("Outside scale" in text.get_text() for text in heat_flow_axis.texts)
+
+
 def test_onsets_interpolate_signals_and_reject_ambiguous_crossings():
     import pytest
     from plot_time_profile import onset_intersections

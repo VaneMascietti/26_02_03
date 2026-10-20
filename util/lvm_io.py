@@ -144,17 +144,19 @@ def _uses_pressure_after_heatflow(raw_df: pd.DataFrame) -> bool:
     return counter_like and pressure_like and pressure_has_signal and following_column_not_pressure
 
 
-def load_lvm(path: Path, program_pdf: Path | None = None) -> pd.DataFrame:
+def load_lvm(path: Path, program_pdf: Path | None = None, *, layout: str = "auto") -> pd.DataFrame:
     """Load an instrument LVM export using the repository's canonical columns."""
     df = pd.read_csv(path, sep="\t", header=None, engine="python")
     while df.shape[1] >= 1 and _series_is_effectively_blank(df.iloc[:, 0]):
         df = df.iloc[:, 1:].copy()
         df.columns = range(df.shape[1])
 
-    pressure_after_heatflow = _uses_pressure_after_heatflow(df)
-    trailing_sample_pressure = (
-        False if pressure_after_heatflow else _uses_trailing_sample_pressure(df)
-    )
+    if layout not in {"auto", "standard", "pressure-after-heatflow", "trailing-sample-pressure"}:
+        raise ValueError(f"Unsupported LVM layout: {layout}")
+    pressure_after_heatflow = (layout == "pressure-after-heatflow" or
+                               (layout == "auto" and _uses_pressure_after_heatflow(df)))
+    trailing_sample_pressure = (layout == "trailing-sample-pressure" or
+                                (layout == "auto" and not pressure_after_heatflow and _uses_trailing_sample_pressure(df)))
     datetime_column = df.shape[1] - 1
     if pressure_after_heatflow:
         rename_map = {
